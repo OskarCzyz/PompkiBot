@@ -162,6 +162,11 @@ async def close_poll_for_date(bot, close_date: date):
     except Exception:
         log.exception("Could not stop poll for %s (maybe already closed)", close_date)
 
+    try:
+        await bot.unpin_chat_message(chat_id=config.GROUP_CHAT_ID, message_id=poll_row["message_id"])
+    except Exception:
+        log.debug("Could not unpin poll for %s (maybe already unpinned)", close_date)
+
     votes = db.get_votes_for_poll(poll_row["id"])
     participants = db.get_active_participants()
     missed = []
@@ -205,6 +210,15 @@ async def job_daily_rollover(context: ContextTypes.DEFAULT_TYPE):
             allows_multiple_answers=False,
         )
         db.create_poll(today.isoformat(), sent.poll.id, sent.message_id)
+        try:
+            await bot.pin_chat_message(
+                chat_id=config.GROUP_CHAT_ID, message_id=sent.message_id, disable_notification=True
+            )
+        except Exception:
+            log.warning(
+                "Could not pin today's poll — the bot likely needs to be a group "
+                "admin with 'Pin messages' permission."
+            )
 
 
 async def job_backup_db(context: ContextTypes.DEFAULT_TYPE):

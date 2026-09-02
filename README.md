@@ -45,7 +45,9 @@ SQLite, no external services required.
 
 - Every day at **08:00** the bot closes **yesterday's** poll (opened 24
   hours earlier), posts that day's miss report to the group, and opens
-  **today's** poll — so exactly one poll is ever open at a time.
+  **today's** poll — so exactly one poll is ever open at a time. It also
+  pins the new poll and unpins the old one, so it requires admin rights
+  (see Setup).
 - Every day at **21:00** the bot posts a reminder in the group, @-mentioning
   everyone who hasn't voted "done" on that day's poll yet.
 - Not voting counts the same as voting "not yet" — silence is a miss.
@@ -75,8 +77,10 @@ SQLite, no external services required.
 
 1. **Create the bot**: talk to [@BotFather](https://t.me/BotFather) on
    Telegram, `/newbot`, copy the token it gives you.
-2. **Add the bot to your group**, as a normal member (no admin rights
-   needed).
+2. **Add the bot to your group**, then promote it to **admin** with the
+   **"Pin messages"** permission — the bot pins each day's poll and unpins
+   the previous one when a new one opens, which requires admin rights.
+   Nothing else needs to be enabled.
 3. **Get the group's chat id**: send any message in the group, then open
    `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser and look for
    `"chat":{"id": -100...}` — that negative number is `GROUP_CHAT_ID`.
