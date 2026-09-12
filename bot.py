@@ -121,6 +121,10 @@ def has_recorded_misses(p) -> bool:
     return bool(db.get_recent_miss_dates(p["user_id"], limit=1))
 
 
+def has_paid_days(p) -> bool:
+    return bool(db.get_recent_paid_dates(p["user_id"], limit=1))
+
+
 def has_markmissed_candidates(p) -> bool:
     already_missed = set(db.get_recent_miss_dates(p["user_id"], limit=1000))
     return any(d not in already_missed for d in db.get_recent_poll_dates())
@@ -429,6 +433,42 @@ async def cmd_markpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nie znaleziono niezapłaconego długu na tę datę.")
 
 
+async def cmd_unmarkpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin override for a /markpaid mistake — undoes it, putting the day
+    back on the unpaid list."""
+    if not is_admin(update.effective_user.id):
+        return
+    target, args = resolve_target(update, context)
+    if not target:
+        await send_participant_picker(
+            update,
+            "up",
+            "Komu cofnąć zapłacony dzień?",
+            filter_fn=has_paid_days,
+            empty_message="Nikt nie ma zapłaconych dni.",
+        )
+        return
+    if not args:
+        paid_dates = db.get_recent_paid_dates(target["user_id"])
+        if not paid_dates:
+            await update.message.reply_text(f"{target['first_name']} nie ma zapłaconych dni.")
+            return
+        await update.message.reply_text(
+            f"Który dzień cofnąć jako niezapłacony ({target['first_name']})?",
+            reply_markup=build_date_keyboard("up", target["user_id"], paid_dates),
+        )
+        return
+    d = parse_date_arg(args[0])
+    if not d:
+        await update.message.reply_text("Nieprawidłowa data, użyj formatu RRRR-MM-DD.")
+        return
+    ok = db.unmark_paid(target["user_id"], d.isoformat())
+    if ok:
+        await update.message.reply_text(f"Cofnięto płatność: {target['first_name']} — {d.isoformat()} ✅")
+    else:
+        await update.message.reply_text("Nie znaleziono zapłaconego długu na tę datę.")
+
+
 async def cmd_markdone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -539,6 +579,22 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text)
         return
 
+    if action == "up":
+        if not rest:
+            paid_dates = db.get_recent_paid_dates(user_id)
+            if not paid_dates:
+                await query.edit_message_text(f"{name} nie ma zapłaconych dni.")
+                return
+            await query.edit_message_text(
+                f"Który dzień cofnąć jako niezapłacony ({name})?",
+                reply_markup=build_date_keyboard("up", user_id, paid_dates),
+            )
+            return
+        ok = db.unmark_paid(user_id, rest[0])
+        text = f"Cofnięto płatność: {name} — {rest[0]} ✅" if ok else "Nie znaleziono zapłaconego długu na tę datę."
+        await query.edit_message_text(text)
+        return
+
     if action == "md":
         if not rest:
             recent = db.get_recent_miss_dates(user_id)
@@ -597,6 +653,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_roster(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Napisz do mnie prywatnie po listę uczestników. 🙂")
+        return
     participants = db.get_active_participants()
     await update.message.reply_text(
         messages.roster_text(participants), parse_mode=ParseMode.HTML
@@ -604,6 +663,9 @@ async def cmd_roster(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Napisz do mnie prywatnie po ranking. 🙂")
+        return
     rows = db.get_full_summary()
     await update.message.reply_text(
         messages.leaderboard_text(rows), parse_mode=ParseMode.HTML
@@ -629,17 +691,15 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 PARTICIPANT_COMMANDS = [
     BotCommand("start", "Dołącz do wyzwania"),
     BotCommand("status", "Sprawdź swoje saldo"),
-]
-
-GROUP_COMMANDS = [
     BotCommand("ranking", "Aktualne zadłużenie wszystkich"),
     BotCommand("uczestnicy", "Lista uczestników wyzwania"),
 ]
 
-ADMIN_COMMANDS = PARTICIPANT_COMMANDS + GROUP_COMMANDS + [
+ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("addparticipant", "Dodaj uczestnika (ID/@username/reply)"),
     BotCommand("removeparticipant", "Usuń uczestnika"),
     BotCommand("markpaid", "Oznacz dzień jako zapłacony"),
+    BotCommand("unmarkpaid", "Cofnij oznaczenie zapłacone (pomyłka)"),
     BotCommand("markdone", "Anuluj zapisaną nieobecność"),
     BotCommand("markmissed", "Wymuś nieobecność na dany dzień"),
 ]
@@ -647,11 +707,13 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + GROUP_COMMANDS + [
 
 async def setup_commands(app: Application):
     """Registers Telegram's native "/" command menu, scoped so each chat
-    only sees what's relevant to it: participants get /start and /status in
-    private chats, the group gets /ranking and /uczestnicy, and each admin's
-    own private chat additionally gets the correction commands."""
+    only sees what's relevant to it: participants get /start, /status,
+    /ranking and /uczestnicy in private chats (the last two only work there
+    — they'd just clutter the group), the group gets no bot commands of its
+    own, and each admin's own private chat additionally gets the correction
+    commands."""
     await app.bot.set_my_commands(PARTICIPANT_COMMANDS, scope=BotCommandScopeAllPrivateChats())
-    await app.bot.set_my_commands(GROUP_COMMANDS, scope=BotCommandScopeAllGroupChats())
+    await app.bot.set_my_commands([], scope=BotCommandScopeAllGroupChats())
     for admin_id in config.ADMIN_IDS:
         try:
             await app.bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeChat(chat_id=admin_id))
@@ -670,6 +732,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("addparticipant", cmd_add_participant))
     app.add_handler(CommandHandler("removeparticipant", cmd_remove_participant))
     app.add_handler(CommandHandler("markpaid", cmd_markpaid))
+    app.add_handler(CommandHandler("unmarkpaid", cmd_unmarkpaid))
     app.add_handler(CommandHandler("markdone", cmd_markdone))
     app.add_handler(CommandHandler("markmissed", cmd_markmissed))
     app.add_handler(CommandHandler("status", cmd_status))

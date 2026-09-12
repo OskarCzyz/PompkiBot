@@ -106,7 +106,10 @@ def leaderboard_text(rows) -> str:
         name = mention_html(participant)
         lines.append(f"- {name}: {owed} PLN do zapłaty (zapłacono {paid} PLN)")
     total_owed = sum(r[1] for r in relevant)
+    total_paid = sum(r[2] for r in relevant)
     lines.append(f"\nŁącznie do zapłaty w tej chwili: {total_owed} PLN")
+    lines.append(f"Łącznie już zebrane: {total_paid} PLN")
+    lines.append(f"Łącznie po rozliczeniu wszystkich: {total_owed + total_paid} PLN")
     return "\n".join(lines)
 
 

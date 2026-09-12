@@ -237,6 +237,27 @@ def mark_paid(user_id: int, miss_date: str) -> bool:
         return cur.rowcount > 0
 
 
+def unmark_paid(user_id: int, miss_date: str) -> bool:
+    """Admin override: undo an accidental /markpaid. Returns True if a row was reverted."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "UPDATE misses SET paid = 0, paid_at = NULL WHERE user_id = ? AND miss_date = ? AND paid = 1",
+            (user_id, miss_date),
+        )
+        return cur.rowcount > 0
+
+
+def get_recent_paid_dates(user_id: int, limit: int = 20) -> list[str]:
+    """A participant's paid miss dates, most recent first — for the
+    admin's /unmarkpaid button picker."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT miss_date FROM misses WHERE user_id = ? AND paid = 1 ORDER BY miss_date DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+        return [r["miss_date"] for r in rows]
+
+
 def get_balance(user_id: int):
     """Returns (total_owed_pln, total_paid_pln, unpaid_dates)."""
     with _conn() as conn:
