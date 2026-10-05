@@ -55,7 +55,8 @@ SQLite, no external services required.
   (see Setup).
 - Every day at **21:00** the bot posts a reminder in the group, @-mentioning
   everyone who hasn't voted "done" on that day's poll yet.
-- Not voting counts the same as voting "not yet" — silence is a miss.
+- Not voting counts the same as voting "#regeneracja" (the second poll
+  option) — a rest day is still a miss, and so is silence.
 - The last poll opens on `LAST_CHALLENGE_DAY` (see `.env`) and closes 24h
   later (08:00 the next day), at which point the bot posts a final summary:
   total pot, per-person balance, and who kept a perfect streak (zero

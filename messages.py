@@ -2,7 +2,7 @@ from html import escape
 
 import config
 
-POLL_OPTIONS = ["Tak, zrobione! ✅", "Jeszcze nie ❌"]
+POLL_OPTIONS = ["Tak, zrobione! ✅", "#regeneracja"]
 
 WEEKDAYS_PL = [
     "poniedziałek", "wtorek", "środa", "czwartek",
