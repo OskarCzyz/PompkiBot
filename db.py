@@ -295,3 +295,31 @@ def get_full_summary():
         (p, *get_balance(p["user_id"]))
         for p in participants
     ]
+
+
+# ---------- end-of-challenge stats ----------
+
+def get_closed_poll_dates() -> list[str]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT poll_date FROM polls WHERE closed = 1 ORDER BY poll_date"
+        ).fetchall()
+        return [r["poll_date"] for r in rows]
+
+
+def get_all_votes():
+    """Every recorded vote with its poll's date — the raw material for the
+    'when did people vote' charts. Only the latest vote per person per poll
+    is kept (record_vote overwrites), which is what we want: switching from
+    'not yet' to 'done' timestamps when they actually did it."""
+    with _conn() as conn:
+        return conn.execute(
+            """SELECT p.poll_date, v.user_id, v.option_id, v.voted_at
+               FROM votes v JOIN polls p ON p.id = v.poll_id
+               ORDER BY p.poll_date"""
+        ).fetchall()
+
+
+def get_all_misses():
+    with _conn() as conn:
+        return conn.execute("SELECT user_id, miss_date FROM misses").fetchall()

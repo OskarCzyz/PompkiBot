@@ -11,6 +11,7 @@ from telegram import (
     BotCommandScopeChat,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaPhoto,
     Update,
 )
 from telegram.constants import ParseMode
@@ -27,6 +28,7 @@ from telegram.ext import (
 import config
 import db
 import messages
+import stats
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -113,6 +115,62 @@ def build_date_keyboard(action: str, user_id: int, dates: list[str]) -> InlineKe
     return InlineKeyboardMarkup(rows)
 
 
+SELECTED_MARK = "✅"
+UNSELECTED_MARK = "▫️"
+
+
+def build_multiselect_date_keyboard(
+    action: str, user_id: int, dates: list[str], selected: set[str], confirm_label: str
+) -> InlineKeyboardMarkup:
+    """Toggleable date checklist for bulk actions (e.g. paying several days
+    in one go). Tapping a date sends "<action>t:<user_id>:<date>" and flips
+    its checkmark; "<action>a:<user_id>" selects/clears all; "<action>c:<user_id>"
+    applies the action to everything checked. The selection lives in the
+    buttons themselves (see selected_dates_from_markup), so it survives a
+    bot restart and needs no server-side state."""
+    buttons = [
+        InlineKeyboardButton(
+            f"{SELECTED_MARK if d in selected else UNSELECTED_MARK} {d}",
+            callback_data=f"{action}t:{user_id}:{d}",
+        )
+        for d in dates
+    ]
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    all_selected = bool(dates) and selected >= set(dates)
+    rows.append([
+        InlineKeyboardButton(
+            "Odznacz wszystkie" if all_selected else "Zaznacz wszystkie",
+            callback_data=f"{action}a:{user_id}",
+        ),
+        InlineKeyboardButton(f"{confirm_label} ({len(selected)})", callback_data=f"{action}c:{user_id}"),
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+def selected_dates_from_markup(markup, action: str) -> set[str]:
+    if not markup:
+        return set()
+    return {
+        b.callback_data.split(":", 2)[2]
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data and b.callback_data.startswith(f"{action}t:") and b.text.startswith(SELECTED_MARK)
+    }
+
+
+def markpaid_keyboard(user_id: int, unpaid_dates: list[str], selected: set[str]) -> InlineKeyboardMarkup:
+    return build_multiselect_date_keyboard("mp", user_id, unpaid_dates, selected, "💰 Zapłacono")
+
+
+def markpaid_prompt(name: str) -> str:
+    return f"Zaznacz dni zapłacone przez {name} i kliknij „Zapłacono”:"
+
+
+def paid_confirmation(name: str, dates: list[str]) -> str:
+    total = len(dates) * config.PENALTY_PLN
+    return f"Zapłacono: {name} — {len(dates)} dz. ({total} PLN): {', '.join(dates)} ✅"
+
+
 def has_unpaid_days(p) -> bool:
     return bool(db.get_balance(p["user_id"])[2])
 
@@ -187,12 +245,28 @@ async def close_poll_for_date(bot, close_date: date):
     )
 
     if close_date == config.LAST_CHALLENGE_DAY:
-        rows = db.get_full_summary()
-        streak_ids = db.get_perfect_streak_user_ids()
-        await bot.send_message(
-            chat_id=config.GROUP_CHAT_ID,
-            text=messages.final_summary(rows, streak_ids),
-            parse_mode=ParseMode.HTML,
+        await send_final_summary(bot, config.GROUP_CHAT_ID)
+
+
+async def send_final_summary(bot, chat_id: int):
+    """The end-of-challenge package: money summary, then the fun stats, then
+    the group-level charts as one album. Also used by /podglad to preview
+    it privately before the real thing goes out to the group."""
+    rows = db.get_full_summary()
+    streak_ids = db.get_perfect_streak_user_ids()
+    await bot.send_message(
+        chat_id=chat_id,
+        text=messages.final_summary(rows, streak_ids),
+        parse_mode=ParseMode.HTML,
+    )
+
+    challenge = stats.collect()
+    await bot.send_message(chat_id=chat_id, text=stats.stats_text(challenge), parse_mode=ParseMode.HTML)
+    charts = await asyncio.to_thread(stats.render_group_charts, challenge, config.SPOTLIGHT_USER)
+    if charts:
+        await bot.send_media_group(
+            chat_id=chat_id,
+            media=[InputMediaPhoto(png, caption=caption) for png, caption in charts],
         )
 
 
@@ -412,25 +486,29 @@ async def cmd_markpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
             empty_message="Nikt nie ma niezapłaconych dni.",
         )
         return
+    _, _, unpaid_dates = db.get_balance(target["user_id"])
     if not args:
-        _, _, unpaid_dates = db.get_balance(target["user_id"])
         if not unpaid_dates:
             await update.message.reply_text(f"{target['first_name']} nie ma niezapłaconych dni.")
             return
         await update.message.reply_text(
-            f"Który dzień oznaczyć jako zapłacony ({target['first_name']})?",
-            reply_markup=build_date_keyboard("mp", target["user_id"], unpaid_dates),
+            markpaid_prompt(target["first_name"]),
+            reply_markup=markpaid_keyboard(target["user_id"], unpaid_dates, set()),
         )
         return
-    d = parse_date_arg(args[0])
-    if not d:
-        await update.message.reply_text("Nieprawidłowa data, użyj formatu RRRR-MM-DD.")
-        return
-    ok = db.mark_paid(target["user_id"], d.isoformat())
-    if ok:
-        await update.message.reply_text(f"Zapłacono: {target['first_name']} — {d.isoformat()} ✅")
+    if args[0].lower() in ("all", "wszystkie"):
+        dates = unpaid_dates
     else:
-        await update.message.reply_text("Nie znaleziono niezapłaconego długu na tę datę.")
+        parsed = [parse_date_arg(a) for a in args]
+        if not all(parsed):
+            await update.message.reply_text("Nieprawidłowa data, użyj formatu RRRR-MM-DD.")
+            return
+        dates = [d.isoformat() for d in parsed]
+    paid = [d for d in dates if db.mark_paid(target["user_id"], d)]
+    if paid:
+        await update.message.reply_text(paid_confirmation(target["first_name"], paid))
+    else:
+        await update.message.reply_text("Nie znaleziono niezapłaconego długu na te daty.")
 
 
 async def cmd_unmarkpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -537,9 +615,11 @@ async def cmd_markmissed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles taps on the button pickers from /removeparticipant, /markpaid,
-    /markdone and /markmissed. callback_data is "<action>:<user_id>" for the
-    participant-selection step, or "<action>:<user_id>:<date>" once a date
-    has also been picked."""
+    /unmarkpaid, /markdone and /markmissed. callback_data is
+    "<action>:<user_id>" for the participant-selection step, or
+    "<action>:<user_id>:<date>" once a date has also been picked. /markpaid's
+    date step is a multi-select checklist instead — see
+    on_markpaid_multiselect."""
     query = update.callback_query
     if not is_admin(query.from_user.id):
         await query.answer("Tylko admin może to zrobić.", show_alert=True)
@@ -548,6 +628,9 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action, user_id_str, *rest = query.data.split(":")
     user_id = int(user_id_str)
     participant = db.get_participant(user_id)
+    if participant and action in ("mpt", "mpa", "mpc"):
+        await on_markpaid_multiselect(query, action, participant, rest)
+        return
     await query.answer()
     if not participant:
         await query.edit_message_text("Nie znaleziono uczestnika.")
@@ -570,12 +653,12 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text(f"{name} nie ma niezapłaconych dni.")
                 return
             await query.edit_message_text(
-                f"Który dzień oznaczyć jako zapłacony ({name})?",
-                reply_markup=build_date_keyboard("mp", user_id, unpaid_dates),
+                markpaid_prompt(name),
+                reply_markup=markpaid_keyboard(user_id, unpaid_dates, set()),
             )
             return
         ok = db.mark_paid(user_id, rest[0])
-        text = f"Zapłacono: {name} — {rest[0]} ✅" if ok else "Nie znaleziono niezapłaconego długu na tę datę."
+        text = paid_confirmation(name, [rest[0]]) if ok else "Nie znaleziono niezapłaconego długu na tę datę."
         await query.edit_message_text(text)
         return
 
@@ -628,6 +711,38 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def on_markpaid_multiselect(query, action: str, participant, rest: list[str]):
+    """The /markpaid date checklist: toggle one date (mpt), toggle all (mpa),
+    or confirm (mpc). Always re-reads the unpaid list from the database, so
+    a day paid in the meantime (e.g. by another admin) just drops out."""
+    user_id = participant["user_id"]
+    name = participant["first_name"]
+    _, _, unpaid_dates = db.get_balance(user_id)
+    selected = selected_dates_from_markup(query.message.reply_markup, "mp") & set(unpaid_dates)
+
+    if action == "mpc":
+        if not selected:
+            await query.answer("Nie zaznaczono żadnego dnia.", show_alert=True)
+            return
+        await query.answer()
+        paid = [d for d in sorted(selected) if db.mark_paid(user_id, d)]
+        text = paid_confirmation(name, paid) if paid else "Nie znaleziono niezapłaconego długu na te daty."
+        await query.edit_message_text(text)
+        return
+
+    await query.answer()
+    if not unpaid_dates:
+        await query.edit_message_text(f"{name} nie ma niezapłaconych dni.")
+        return
+    if action == "mpt":
+        selected ^= {rest[0]} & set(unpaid_dates)
+    else:
+        selected = set() if selected >= set(unpaid_dates) else set(unpaid_dates)
+    await query.edit_message_text(
+        markpaid_prompt(name), reply_markup=markpaid_keyboard(user_id, unpaid_dates, selected)
+    )
+
+
 # ---------- participant-facing commands ----------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -672,6 +787,55 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def challenge_finished() -> bool:
+    """True once the last poll has been closed (and the final summary posted)."""
+    last = db.get_poll_by_date(config.LAST_CHALLENGE_DAY.isoformat())
+    if last:
+        return bool(last["closed"])
+    return datetime.now(config.TIMEZONE) >= datetime.combine(
+        config.LAST_CHALLENGE_DAY + timedelta(days=1), time(8, 0), tzinfo=config.TIMEZONE
+    )
+
+
+async def cmd_personal_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Anyone's own end-of-challenge stats + chart, in a private chat. Only
+    unlocked once the challenge is over (admins can peek any time)."""
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Napisz do mnie prywatnie /podsumowanie po swoje statystyki. 🙂")
+        return
+    user_id = update.effective_user.id
+    if not challenge_finished() and not is_admin(user_id):
+        await update.message.reply_text(
+            f"Podsumowanie będzie dostępne po zakończeniu wyzwania — od "
+            f"{messages.format_date_pl(config.LAST_CHALLENGE_DAY + timedelta(days=1))}, 8:00. 💪"
+        )
+        return
+    challenge = stats.collect()
+    person = next((p for p in challenge.people if p.user_id == user_id), None)
+    if not person:
+        await update.message.reply_text("Nie znalazłem Twoich danych z wyzwania. 🤷")
+        return
+    owed, paid, _ = db.get_balance(user_id)
+    await update.message.reply_text(
+        stats.personal_text(challenge, person, owed, paid), parse_mode=ParseMode.HTML
+    )
+    png = await asyncio.to_thread(stats.render_personal_chart, person)
+    await update.message.reply_photo(png)
+
+
+async def cmd_group_summary_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only: sends the end-of-challenge summary, group stats and charts
+    to the admin's private chat — a preview of what the group gets once the
+    last poll closes."""
+    if not is_admin(update.effective_user.id):
+        return
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Napisz do mnie prywatnie po podgląd podsumowania. 🙂")
+        return
+    await update.message.reply_text("Generuję podgląd podsumowania końcowego… ⏳")
+    await send_final_summary(context.bot, update.effective_chat.id)
+
+
 # ---------- error handling ----------
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -693,6 +857,7 @@ PARTICIPANT_COMMANDS = [
     BotCommand("status", "Sprawdź swoje saldo"),
     BotCommand("ranking", "Aktualne zadłużenie wszystkich"),
     BotCommand("uczestnicy", "Lista uczestników wyzwania"),
+    BotCommand("podsumowanie", "Twoje statystyki (po zakończeniu wyzwania)"),
 ]
 
 ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
@@ -702,6 +867,7 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("unmarkpaid", "Cofnij oznaczenie zapłacone (pomyłka)"),
     BotCommand("markdone", "Anuluj zapisaną nieobecność"),
     BotCommand("markmissed", "Wymuś nieobecność na dany dzień"),
+    BotCommand("podglad", "Podgląd podsumowania końcowego dla grupy"),
 ]
 
 
@@ -738,6 +904,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("uczestnicy", cmd_roster))
     app.add_handler(CommandHandler("ranking", cmd_leaderboard))
+    app.add_handler(CommandHandler("podsumowanie", cmd_personal_summary))
+    app.add_handler(CommandHandler("podglad", cmd_group_summary_preview))
     app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
     app.add_handler(CallbackQueryHandler(on_admin_callback))

@@ -22,7 +22,12 @@ SQLite, no external services required.
   `/markmissed`, `/removeparticipant` all work as a tappable picker (person
   → date), no typing required.
 - **Money ledger, not a payment processor** — tracks who owes what and who's
-  paid; actual transfers happen outside the bot (e.g. BLIK).
+  paid; actual transfers happen outside the bot (e.g. BLIK). Several days
+  can be marked paid in one go from a checklist.
+- **End-of-challenge stats & charts** — group-level stats plus a handful of
+  individual oddities in the group, an album of group charts, and a
+  personal `/podsumowanie` (stats + own chart) everyone can request
+  privately once the challenge is over.
 - **Self-healing** — recovers automatically from downtime (multi-day
   outages included) without losing a day's data; daily automatic database
   backups.
@@ -54,7 +59,20 @@ SQLite, no external services required.
 - The last poll opens on `LAST_CHALLENGE_DAY` (see `.env`) and closes 24h
   later (08:00 the next day), at which point the bot posts a final summary:
   total pot, per-person balance, and who kept a perfect streak (zero
-  misses).
+  misses) — followed by a group stats message (pushups done, completion
+  spread, best/worst day and weekday, typical time, reminder effect, …), a
+  short "Ciekawostki" list of individual oddities (earliest/latest votes,
+  most regular vs most chaotic schedule, longest slump, weekend slacker,
+  schedule flip, …; at most two per person) and an album of group-level
+  charts (daily form, completion distribution, vote-time histogram,
+  weekday × hour heatmap, a one-dot-per-person outlier scatter, plus the
+  `SPOTLIGHT_USER` from `.env`). Vote time is the proxy for "when they did
+  their pushups". Admins can preview this privately any time with
+  `/podglad`.
+- After that, anyone can DM the bot `/podsumowanie` for their own stats
+  (rank, streaks, typical time vs the group, money) and a personal chart.
+  Before the last poll closes it just says when it unlocks (admins can
+  use it any time).
 - Anyone can DM the bot `/start` to join the challenge (self-registration —
   see "Adding participants" below), and `/status` any time after to see
   what they owe, what they've paid, and which specific dates are still
@@ -87,7 +105,7 @@ SQLite, no external services required.
 4. **Get your own user id** (to be admin): message
    [@userinfobot](https://t.me/userinfobot) and it'll reply with your id.
 5. Copy `.env.example` to `.env` and fill in `BOT_TOKEN`, `GROUP_CHAT_ID`,
-   `ADMIN_IDS`, `LAST_CHALLENGE_DAY`.
+   `ADMIN_IDS`, `LAST_CHALLENGE_DAY` (and optionally `SPOTLIGHT_USER`).
 
 ```bash
 python -m venv venv
@@ -203,15 +221,25 @@ also be targeted the same ways — plus a fourth, easiest one:
   before removal stays recorded (it's real money already in the pot), it
   just isn't tied to anyone still on the board.
 - `/markpaid @user 2026-09-03` — mark that specific missed date as paid.
+  Several dates at once work too (`/markpaid @user 2026-09-03 2026-09-05`),
+  or `/markpaid @user wszystkie` for every unpaid day. The button flow
+  shows a checklist instead: tick any number of dates (or "Zaznacz
+  wszystkie") and confirm with "Zapłacono".
+- `/unmarkpaid @user 2026-09-03` — undo an accidental `/markpaid`.
 - `/markdone @user 2026-09-03` — override: erase a recorded miss (e.g. a bot
   hiccup or a genuine dispute).
 - `/markmissed @user 2026-09-03` — override: force a miss to exist for that
   date.
+- `/podglad` (private chat only) — preview the end-of-challenge summary,
+  group stats and charts in your own DM, without posting anything to the
+  group.
 
 ## Participant commands
 
 - `/status`, sent as a **private message** to the bot (not in the group) —
   shows total owed, total paid, and the list of unpaid dates.
+- `/podsumowanie` (private, unlocks once the challenge ends) — personal
+  end-of-challenge stats and chart.
 
 ## Group commands (anyone can use these)
 
