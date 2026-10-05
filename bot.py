@@ -820,7 +820,7 @@ async def cmd_personal_summary(update: Update, context: ContextTypes.DEFAULT_TYP
         stats.personal_text(challenge, person, owed, paid), parse_mode=ParseMode.HTML
     )
     png = await asyncio.to_thread(stats.render_personal_chart, person)
-    await update.message.reply_photo(png)
+    await update.message.reply_photo(png, caption=f"Statystyki wyzwania: {stats.person_label(person)} 💪")
 
 
 async def cmd_group_summary_preview(update: Update, context: ContextTypes.DEFAULT_TYPE):

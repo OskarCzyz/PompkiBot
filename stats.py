@@ -684,5 +684,12 @@ def render_group_charts(stats: ChallengeStats, spotlight_query: str = "") -> lis
     return charts
 
 
+def person_label(person: Person) -> str:
+    username = person.participant["username"]
+    return f"{person.name} (@{username})" if username else person.name
+
+
 def render_personal_chart(person: Person) -> bytes:
-    return chart_person(person, "Twoje pompki dzień po dniu")
+    """Named in the title, so the image still says whose it is once it gets
+    forwarded around."""
+    return chart_person(person, f"Pompki dzień po dniu: {person_label(person)}")
