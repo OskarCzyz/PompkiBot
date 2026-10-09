@@ -234,6 +234,10 @@ also be targeted the same ways — plus a fourth, easiest one:
 - `/podglad` (private chat only) — preview the end-of-challenge summary,
   group stats and charts in your own DM, without posting anything to the
   group.
+- `/ranking zalegli` (private chat only) — only people who currently owe
+  money, name and amount, nothing else.
+- `/napisz <treść>` (private chat only) — post `<treść>` to the group as
+  the bot. Plain text, sent exactly as typed (multi-line works).
 
 ## Participant commands
 

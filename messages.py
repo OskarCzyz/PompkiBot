@@ -113,5 +113,15 @@ def leaderboard_text(rows) -> str:
     return "\n".join(lines)
 
 
+def owing_text(rows) -> str:
+    owing = sorted((r for r in rows if r[1] > 0), key=lambda r: r[1], reverse=True)
+    if not owing:
+        return "Nikt nie zalega z płatnością. 🎉"
+    lines = ["<b>Zalegają z płatnością:</b>", ""]
+    for participant, owed, _paid, _unpaid_dates in owing:
+        lines.append(f"{mention_html(participant)} — <b>{owed} PLN</b>")
+    return "\n".join(lines)
+
+
 def admin_error_alert(error_text: str) -> str:
     return f"Błąd w PompkiBocie:\n{error_text}"

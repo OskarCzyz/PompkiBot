@@ -781,10 +781,13 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         await update.message.reply_text("Napisz do mnie prywatnie po ranking. 🙂")
         return
+    owing_only = bool(context.args) and context.args[0].lower() == "zalegli"
+    if context.args and not owing_only:
+        await update.message.reply_text("Użycie: /ranking lub /ranking zalegli")
+        return
     rows = db.get_full_summary()
-    await update.message.reply_text(
-        messages.leaderboard_text(rows), parse_mode=ParseMode.HTML
-    )
+    text = messages.owing_text(rows) if owing_only else messages.leaderboard_text(rows)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 def challenge_finished() -> bool:
@@ -836,6 +839,24 @@ async def cmd_group_summary_preview(update: Update, context: ContextTypes.DEFAUL
     await send_final_summary(context.bot, update.effective_chat.id)
 
 
+async def cmd_say_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin-only, private chat only: posts the given text to the group as the
+    bot. Plain text on purpose — no HTML/Markdown parsing of admin input."""
+    if not is_admin(update.effective_user.id):
+        return
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("Napisz do mnie prywatnie, nie w grupie. 🙂")
+        return
+    parts = update.message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await update.message.reply_text(
+            "Użycie: /napisz <treść> — wysyła podaną treść na grupę jako bot."
+        )
+        return
+    await context.bot.send_message(chat_id=config.GROUP_CHAT_ID, text=parts[1])
+    await update.message.reply_text("Wysłano na grupę. ✅")
+
+
 # ---------- error handling ----------
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -868,6 +889,7 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("markdone", "Anuluj zapisaną nieobecność"),
     BotCommand("markmissed", "Wymuś nieobecność na dany dzień"),
     BotCommand("podglad", "Podgląd podsumowania końcowego dla grupy"),
+    BotCommand("napisz", "Napisz na grupie jako bot"),
 ]
 
 
@@ -906,6 +928,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ranking", cmd_leaderboard))
     app.add_handler(CommandHandler("podsumowanie", cmd_personal_summary))
     app.add_handler(CommandHandler("podglad", cmd_group_summary_preview))
+    app.add_handler(CommandHandler("napisz", cmd_say_in_group))
     app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
     app.add_handler(CallbackQueryHandler(on_admin_callback))
