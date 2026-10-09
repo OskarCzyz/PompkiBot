@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS misses (
     paid_at     TEXT,
     PRIMARY KEY (user_id, miss_date)
 );
+
+CREATE TABLE IF NOT EXISTS regen_days (
+    user_id     INTEGER NOT NULL,
+    regen_date  TEXT NOT NULL,
+    PRIMARY KEY (user_id, regen_date)
+);
 """
 
 
@@ -210,6 +216,33 @@ def record_miss(user_id: int, miss_date: str):
             "INSERT OR IGNORE INTO misses (user_id, miss_date, paid) VALUES (?, ?, 0)",
             (user_id, miss_date),
         )
+
+
+def set_regen(user_id: int, regen_date: str):
+    """Admin flag: this day's pushup skip was a deliberate #regeneracja, not
+    a forgotten workout. Stored independently of misses, since the miss for
+    a day is only recorded when its poll closes the next morning."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO regen_days (user_id, regen_date) VALUES (?, ?)",
+            (user_id, regen_date),
+        )
+
+
+def get_regen_user_ids(regen_date: str) -> set[int]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT user_id FROM regen_days WHERE regen_date = ?", (regen_date,)
+        ).fetchall()
+        return {row["user_id"] for row in rows}
+
+
+def has_miss(user_id: int, miss_date: str) -> bool:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM misses WHERE user_id = ? AND miss_date = ?", (user_id, miss_date)
+        ).fetchone()
+        return row is not None
 
 
 def mark_done(user_id: int, miss_date: str) -> bool:

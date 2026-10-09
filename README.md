@@ -236,6 +236,12 @@ also be targeted the same ways — plus a fourth, easiest one:
   group.
 - `/ranking zalegli` (private chat only) — only people who currently owe
   money, name and amount, nothing else.
+- `/regeneracja` — for today only. Without a name, shows a button per
+  person who picked `#regeneracja` in today's poll; tap to flag them.
+  With `@user` (or reply / ID) flags that person directly. The day's miss
+  report then marks them as "nie zapomniał, to świadomy wybór". If that
+  day's report already went out, the group gets that note right away.
+  Payment is unchanged.
 - `/napisz <treść>` (private chat only) — post `<treść>` to the group as
   the bot. Plain text, sent exactly as typed (multi-line works).
 

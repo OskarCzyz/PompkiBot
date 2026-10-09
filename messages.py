@@ -4,6 +4,8 @@ import config
 
 POLL_OPTIONS = ["Tak, zrobione! ✅", "#regeneracja"]
 
+REGEN_TAG = " — #regeneracja (nie zapomniał, to był świadomy wybór)"
+
 WEEKDAYS_PL = [
     "poniedziałek", "wtorek", "środa", "czwartek",
     "piątek", "sobota", "niedziela",
@@ -24,15 +26,22 @@ def mention_html(participant) -> str:
     return f'<a href="tg://user?id={participant["user_id"]}">{escape(participant["first_name"])}</a>'
 
 
-def miss_report(day, missed_participants: list) -> str:
+def miss_report(day, missed_participants: list, regen_user_ids: set[int] = frozenset()) -> str:
     date_str = format_date_pl(day)
     if not missed_participants:
         return f"🎉 Brawo! {date_str} — wszyscy zrobili pompki!"
-    names = "\n".join(f"• {mention_html(p)}" for p in missed_participants)
+    names = "\n".join(
+        f"• {mention_html(p)}" + (REGEN_TAG if p["user_id"] in regen_user_ids else "")
+        for p in missed_participants
+    )
     return (
         f"📋 Podsumowanie dnia {date_str}:\n\n"
         f"Pompek nie zrobili (do zapłaty {config.PENALTY_PLN} PLN):\n{names}"
     )
+
+
+def regen_note(day, participant) -> str:
+    return f"ℹ️ {mention_html(participant)} — {format_date_pl(day)}: to była #regeneracja, nie zapomniał o pompkach, to świadomy wybór."
 
 
 def reminder(not_done_participants: list) -> str:

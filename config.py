@@ -18,7 +18,7 @@ PUSHUPS_PER_DAY = 50
 
 # Who gets their own "how did they do it" chart in the final stats — an
 # @username, a numeric user id, or a first name (case-insensitive).
-SPOTLIGHT_USER = os.environ.get("SPOTLIGHT_USER", "Krzysztof").strip()
+SPOTLIGHT_USER = os.environ.get("SPOTLIGHT_USER", "").strip()
 DB_PATH = os.environ.get("DB_PATH", "pushups.db")
 BACKUP_DIR = os.environ.get("BACKUP_DIR", "backups")
 

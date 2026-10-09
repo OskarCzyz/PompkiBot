@@ -33,6 +33,10 @@ from messages import WEEKDAYS_PL, mention_html
 POLL_OPEN = time(8, 0)
 REMINDER_OFFSET = 13.0  # 21:00 is 13h after the 08:00 open
 MIDNIGHT_OFFSET = 16.0
+# Votes later than 05:00 the next morning (21h after the 08:00 open) are
+# catch-ups for a forgotten check-in, not a habit: the day still counts as
+# done, but they stay out of every time-of-day stat.
+CATCH_UP_OFFSET = 21.0
 MIN_TIMED = 5  # done votes needed before someone's time-of-day habits count
 
 WEEKDAYS_SHORT = ["pon", "wt", "śr", "czw", "pt", "sob", "nd"]
@@ -59,7 +63,7 @@ class Person:
     participant: object
     days: list[str] = field(default_factory=list)          # closed poll dates they were in
     missed: set[str] = field(default_factory=set)
-    done_offsets: dict[str, float] = field(default_factory=dict)  # date -> hours since open
+    done_offsets: dict[str, float] = field(default_factory=dict)  # date -> hours since open, habit votes only
 
     @property
     def user_id(self) -> int:
@@ -140,11 +144,14 @@ class ChallengeStats:
         return [(p, d, h) for p in self.people for d, h in p.done_offsets.items()]
 
 
-def hours_since_open(poll_date: str, voted_at: str) -> float:
+def raw_hours_since_open(poll_date: str, voted_at: str) -> float:
     opened = datetime.combine(date.fromisoformat(poll_date), POLL_OPEN, tzinfo=config.TIMEZONE)
     voted = datetime.fromisoformat(voted_at).astimezone(config.TIMEZONE)
-    h = (voted - opened).total_seconds() / 3600
-    return min(max(h, 0.0), 23.999)
+    return (voted - opened).total_seconds() / 3600
+
+
+def hours_since_open(poll_date: str, voted_at: str) -> float:
+    return min(max(raw_hours_since_open(poll_date, voted_at), 0.0), 23.999)
 
 
 def build(poll_dates, participants, votes, misses) -> ChallengeStats:
@@ -189,7 +196,8 @@ def build(poll_dates, participants, votes, misses) -> ChallengeStats:
             and v["poll_date"] in poll_set
             and v["poll_date"] not in person.missed
         ):
-            person.done_offsets[v["poll_date"]] = hours_since_open(v["poll_date"], v["voted_at"])
+            if raw_hours_since_open(v["poll_date"], v["voted_at"]) < CATCH_UP_OFFSET:
+                person.done_offsets[v["poll_date"]] = hours_since_open(v["poll_date"], v["voted_at"])
 
     return ChallengeStats(poll_dates=list(poll_dates), people=people)
 

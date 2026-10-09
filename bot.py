@@ -238,9 +238,12 @@ async def close_poll_for_date(bot, close_date: date):
             missed.append(p)
     db.close_poll(poll_row["id"])
 
+    regen_ids = db.get_regen_user_ids(close_date.isoformat()) | {
+        uid for uid, option in votes.items() if option == config.OPTION_NOT_YET
+    }
     await bot.send_message(
         chat_id=config.GROUP_CHAT_ID,
-        text=messages.miss_report(close_date, missed),
+        text=messages.miss_report(close_date, missed, regen_ids),
         parse_mode=ParseMode.HTML,
     )
 
@@ -473,6 +476,50 @@ async def cmd_remove_participant(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
+def regen_today_voters():
+    """Active participants who picked #regeneracja in today's poll."""
+    today = datetime.now(config.TIMEZONE).date().isoformat()
+    poll_row = db.get_poll_by_date(today)
+    if not poll_row:
+        return []
+    votes = db.get_votes_for_poll(poll_row["id"])
+    return [p for p in db.get_active_participants() if votes.get(p["user_id"]) == config.OPTION_NOT_YET]
+
+
+async def apply_regen_today(bot, participant) -> str:
+    """Flags today's skip as #regeneracja for participant. If today's miss is
+    already on record (the report went out), the group also gets a note."""
+    today = datetime.now(config.TIMEZONE).date()
+    db.set_regen(participant["user_id"], today.isoformat())
+    if db.has_miss(participant["user_id"], today.isoformat()):
+        await bot.send_message(
+            chat_id=config.GROUP_CHAT_ID,
+            text=messages.regen_note(today, participant),
+            parse_mode=ParseMode.HTML,
+        )
+        return f"Zapisano #regeneracja: {participant['first_name']} ✅ (wysłano na grupę)"
+    return f"Zapisano #regeneracja: {participant['first_name']} ✅ (pojawi się w raporcie po zamknięciu ankiety)"
+
+
+async def cmd_regeneracja(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: flags today's skip as a deliberate #regeneracja. With a target
+    (reply / @name / ID) flags them directly; without one, offers a button per
+    person who picked #regeneracja in today's poll."""
+    if not is_admin(update.effective_user.id):
+        return
+    target, _args = resolve_target(update, context)
+    if target:
+        await update.message.reply_text(await apply_regen_today(context.bot, target))
+        return
+    voters = regen_today_voters()
+    if not voters:
+        return
+    await update.message.reply_text(
+        "Kogo oznaczyć jako #regeneracja (dzisiaj)?",
+        reply_markup=build_participant_keyboard("rg", voters),
+    )
+
+
 async def cmd_markpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -615,7 +662,7 @@ async def cmd_markmissed(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles taps on the button pickers from /removeparticipant, /markpaid,
-    /unmarkpaid, /markdone and /markmissed. callback_data is
+    /unmarkpaid, /markdone, /markmissed and /regeneracja. callback_data is
     "<action>:<user_id>" for the participant-selection step, or
     "<action>:<user_id>:<date>" once a date has also been picked. /markpaid's
     date step is a multi-select checklist instead — see
@@ -636,6 +683,10 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Nie znaleziono uczestnika.")
         return
     name = participant["first_name"]
+
+    if action == "rg":
+        await query.edit_message_text(await apply_regen_today(context.bot, participant))
+        return
 
     if action == "rm":
         db.remove_participant(user_id)
@@ -890,6 +941,7 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("markmissed", "Wymuś nieobecność na dany dzień"),
     BotCommand("podglad", "Podgląd podsumowania końcowego dla grupy"),
     BotCommand("napisz", "Napisz na grupie jako bot"),
+    BotCommand("regeneracja", "Oznacz nieobecność jako #regeneracja"),
 ]
 
 
@@ -929,6 +981,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("podsumowanie", cmd_personal_summary))
     app.add_handler(CommandHandler("podglad", cmd_group_summary_preview))
     app.add_handler(CommandHandler("napisz", cmd_say_in_group))
+    app.add_handler(CommandHandler("regeneracja", cmd_regeneracja))
     app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
     app.add_handler(CallbackQueryHandler(on_admin_callback))
