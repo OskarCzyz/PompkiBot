@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS misses (
     miss_date   TEXT NOT NULL,
     paid        INTEGER NOT NULL DEFAULT 0,
     paid_at     TEXT,
+    waived      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, miss_date)
 );
 
@@ -59,6 +60,10 @@ def _conn():
 def init_db():
     with _conn() as conn:
         conn.executescript(SCHEMA)
+        # Migration for databases created before misses.waived existed.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(misses)")}
+        if "waived" not in cols:
+            conn.execute("ALTER TABLE misses ADD COLUMN waived INTEGER NOT NULL DEFAULT 0")
 
 
 # ---------- participants ----------
@@ -259,12 +264,23 @@ def mark_missed(user_id: int, miss_date: str):
     record_miss(user_id, miss_date)
 
 
+def add_waived_miss(user_id: int, miss_date: str):
+    """A miss that counts in the stats but carries no penalty — for days
+    fixed up after the fact (e.g. someone who voted without ever being
+    registered, so their misses were never recorded at the time)."""
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO misses (user_id, miss_date, paid, waived) VALUES (?, ?, 0, 1)",
+            (user_id, miss_date),
+        )
+
+
 def mark_paid(user_id: int, miss_date: str) -> bool:
     """Mark one specific missed date as paid. Returns True if it matched a row."""
     with _conn() as conn:
         cur = conn.execute(
             """UPDATE misses SET paid = 1, paid_at = ?
-               WHERE user_id = ? AND miss_date = ? AND paid = 0""",
+               WHERE user_id = ? AND miss_date = ? AND paid = 0 AND waived = 0""",
             (datetime.now(config.TIMEZONE).date().isoformat(), user_id, miss_date),
         )
         return cur.rowcount > 0
@@ -292,10 +308,11 @@ def get_recent_paid_dates(user_id: int, limit: int = 20) -> list[str]:
 
 
 def get_balance(user_id: int):
-    """Returns (total_owed_pln, total_paid_pln, unpaid_dates)."""
+    """Returns (total_owed_pln, total_paid_pln, unpaid_dates). Waived misses
+    don't cost anything, so they're left out."""
     with _conn() as conn:
         rows = conn.execute(
-            "SELECT miss_date, paid FROM misses WHERE user_id = ? ORDER BY miss_date",
+            "SELECT miss_date, paid FROM misses WHERE user_id = ? AND waived = 0 ORDER BY miss_date",
             (user_id,),
         ).fetchall()
         unpaid_dates = [r["miss_date"] for r in rows if not r["paid"]]

@@ -378,6 +378,14 @@ async def on_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not poll_row or poll_row["closed"]:
         return
 
+    # Someone voting who was never registered is clearly taking part —
+    # without this their misses would never be recorded (penalties,
+    # reminders and stats would all skip them). Removed participants
+    # (still in the table, inactive) are left alone.
+    if not db.get_participant(answer.user.id) and not answer.user.is_bot:
+        db.add_participant(answer.user.id, answer.user.username, answer.user.first_name)
+        log.info("Auto-registered %s (%s) via poll vote", answer.user.first_name, answer.user.id)
+
     if answer.option_ids:
         db.record_vote(
             poll_row["id"],
