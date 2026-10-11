@@ -116,6 +116,42 @@ cp .env.example .env   # then edit it
 python bot.py
 ```
 
+## Automatic payments (optional)
+
+The bot can read incoming transfers on your bank account (read-only,
+PSD2 via [Enable Banking](https://enablebanking.com), restricted mode with
+your own account) and mark penalties paid by itself.
+
+- Every participant has a short pay code (shown in the miss report and in
+  `/status`). They put `POMPKI <code>` in the transfer title (BLIK to your
+  phone number works too).
+- Every 8 hours the bot fetches new incoming transfers, matches them by code
+  (or by sender name, which it learns), pays off the oldest unpaid days
+  (`amount / PENALTY_PLN`) and announces it in the group. Overpayments carry
+  over to future misses; partial payments add up.
+- Transfers it can't place go to the admins as a DM with a person picker;
+  the choice is remembered for that sender. Unrelated income (salary etc.)
+  is ignored silently.
+- `/odswiez` (admin) fetches right now. Banks cap unattended reads at a few
+  per day, so it can answer "try again in a few hours".
+- One-time setup: register an app at Enable Banking, put its id and private
+  key into `.env` (`EB_APP_ID`, `EB_KEY_PATH`), run `python bank_auth.py
+  start`, log in to the bank from the link, then `python bank_auth.py
+  finish <code from the redirect URL>` and paste the printed `EB_*` lines
+  into `.env`. The consent lasts up to ~90–180 days; the bot DMs the admins
+  a week before it expires.
+- **Kick for non-payment** (needs automatic payments): someone who owes
+  money and hasn't paid anything for 14 days (`KICK_AFTER_DAYS`) is removed
+  from the group — banned and instantly unbanned, so they can be re-added.
+  Their unpaid debt is forgiven, like `/removeparticipant`. The clock starts
+  at the latest of: their last payment, their oldest unpaid miss, and the
+  day the feature first ran (so old debts don't cause a mass kick on launch).
+  Reminders: a DM at 7 and 2 days left, a group message at 1 day left.
+  Admins are exempt. Checked daily at 09:00, and only on fresh bank data.
+  The bot needs the **"Ban users"** admin right in the group. Turn it off
+  with `AUTO_KICK=0`.
+- Tests: `python -m unittest discover -s tests`.
+
 ## Adding participants
 
 **Easiest: self-registration.** Anyone can DM the bot `/start` themselves
@@ -294,6 +330,58 @@ WantedBy=multi-user.target
 sudo systemctl daemon-reload
 sudo systemctl enable --now pompkibot
 ```
+
+### Working with the server
+
+The live instance runs on a DigitalOcean droplet (Ubuntu 24.04), as root,
+from `/opt/pompkibot` (a git clone of this repo) under the `pompkibot`
+systemd service. Replace `<SERVER_IP>` below with the droplet's IP (see the
+DigitalOcean dashboard). Login is by SSH key, no password.
+
+**Connect:**
+
+```bash
+ssh root@<SERVER_IP>
+cd /opt/pompkibot
+```
+
+Run these as separate commands: pasting `ssh ...` and `cd ...` together
+runs the `cd` on your own machine after you log out, not on the server.
+
+**Deploy a new version** (after pushing to `master`):
+
+```bash
+cd /opt/pompkibot
+cp pushups.db pushups-before-update.db       # quick safety backup
+git pull
+venv/bin/pip install -r requirements.txt     # only if requirements.txt changed
+systemctl restart pompkibot
+systemctl status pompkibot                   # expect "active (running)"; q to exit
+journalctl -u pompkibot -n 30 --no-pager     # expect "PompkiBot started.", no tracebacks
+```
+
+Avoid restarting right around 08:00 or 21:00. If git complains about
+"dubious ownership", run
+`git config --global --add safe.directory /opt/pompkibot` once.
+
+**Change settings** (`LAST_CHALLENGE_DAY`, `SPOTLIGHT_USER`, admins, …):
+`nano /opt/pompkibot/.env`, then `systemctl restart pompkibot`. The server's
+`.env` is not in git, so it overrides the defaults in `config.py`.
+
+**Logs:**
+
+```bash
+journalctl -u pompkibot -f                   # follow live; Ctrl+C to stop
+journalctl -u pompkibot --since "1 hour ago" --no-pager
+```
+
+**Copy the database to your machine** (run locally, not on the server):
+
+```bash
+scp root@<SERVER_IP>:/opt/pompkibot/pushups.db ./pushups.db
+```
+
+Daily backups are also kept on the server in `/opt/pompkibot/backups/`.
 
 ## Known limitation
 

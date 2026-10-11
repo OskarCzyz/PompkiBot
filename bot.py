@@ -25,9 +25,12 @@ from telegram.ext import (
     filters,
 )
 
+import bank
 import config
 import db
+import enforcement
 import messages
+import payments
 import stats
 
 logging.basicConfig(
@@ -823,7 +826,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Napisz do mnie prywatnie, żeby sprawdzić swoje saldo. 🙂")
         return
     owed, paid, unpaid_dates = db.get_balance(update.effective_user.id)
-    await update.message.reply_text(messages.status_reply(owed, paid, unpaid_dates))
+    p = db.get_participant(update.effective_user.id)
+    await update.message.reply_text(
+        messages.status_reply(
+            owed, paid, unpaid_dates,
+            pay_code=p["pay_code"] if p else None,
+            credit=db.get_credit(update.effective_user.id),
+            last_sync=db.get_state("last_sync_at"),
+        )
+    )
 
 
 async def cmd_roster(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -916,6 +927,250 @@ async def cmd_say_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Wysłano na grupę. ✅")
 
 
+# ---------- automatic payments ----------
+
+def unmatched_keyboard(payment_id: int) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(participant_button_label(p), callback_data=f"pm:{payment_id}:{p['user_id']}")
+        for p in db.get_active_participants()
+    ]
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton("🚫 Nie dotyczy pompek", callback_data=f"pm:{payment_id}:x")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def dm_admins(bot, text: str, **kwargs):
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await bot.send_message(chat_id=admin_id, text=text, **kwargs)
+        except Exception:
+            log.warning("Could not DM admin %s", admin_id)
+
+
+async def announce_payment(bot, user_id: int, amount: int, paid_dates: list[str], credit: int):
+    participant = db.get_participant(user_id)
+    still_owed = db.get_balance(user_id)[0]
+    text = messages.payment_received(participant, amount, paid_dates, credit, still_owed)
+    if not participant["active"]:
+        # Someone who was removed (e.g. kicked) — don't ping them in a group
+        # they're no longer in; just tell the admins.
+        await dm_admins(bot, text, parse_mode=ParseMode.HTML)
+        return
+    await bot.send_message(chat_id=config.GROUP_CHAT_ID, text=text, parse_mode=ParseMode.HTML)
+
+
+async def sync_payments(bot) -> str:
+    """Pulls new incoming transfers from the bank, books them, announces
+    them in the group and asks the admins about the ones it can't place.
+    Returns a one-line summary. Raises bank.BankError if the bank can't be
+    read."""
+    since = db.get_state("sync_from")
+    if not since:
+        since = (datetime.now(config.TIMEZONE).date() - timedelta(days=1)).isoformat()
+        db.set_state("sync_from", since)
+    # Overlap a few days: a transfer booked late still gets picked up, and
+    # the unique tx_id makes re-reading harmless.
+    date_from = date.fromisoformat(since) - timedelta(days=3)
+    transfers = await bank.fetch_incoming(date_from)
+    db.set_state("last_sync_at", datetime.now(config.TIMEZONE).strftime("%d.%m %H:%M"))
+    db.set_state("last_sync_ts", datetime.now(config.TIMEZONE).isoformat(timespec="seconds"))
+
+    new = applied = unmatched = 0
+    for transfer in transfers:
+        outcome = payments.process(transfer)
+        if outcome is None or outcome.ignored:
+            continue
+        new += 1
+        if outcome.user_id is None:
+            unmatched += 1
+            row = db.get_payment(outcome.payment_id)
+            await dm_admins(
+                bot, messages.unmatched_payment_alert(row),
+                reply_markup=unmatched_keyboard(outcome.payment_id),
+            )
+        else:
+            applied += 1
+            await announce_payment(bot, outcome.user_id, transfer.amount, outcome.paid_dates, outcome.credit)
+
+    for user_id, paid_dates, credit in payments.apply_pending_credit():
+        await announce_payment(bot, user_id, 0, paid_dates, credit)
+    return messages.sync_summary(new, applied, unmatched)
+
+
+async def job_sync_payments(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await sync_payments(context.bot)
+    except bank.BankRateLimited:
+        log.info("Bank rate limit hit, will retry on the next run.")
+    except Exception as e:
+        log.exception("Payment sync failed")
+        # Alert at most once a day, so a bank outage doesn't spam the admins.
+        today = datetime.now(config.TIMEZONE).date().isoformat()
+        if db.get_state("last_bank_alert") != today:
+            db.set_state("last_bank_alert", today)
+            await dm_admins(context.bot, messages.bank_error_alert(str(e)[:300]))
+    await warn_consent_expiring(context.bot)
+
+
+async def warn_consent_expiring(bot):
+    if not config.EB_CONSENT_UNTIL:
+        return
+    days_left = (date.fromisoformat(config.EB_CONSENT_UNTIL) - datetime.now(config.TIMEZONE).date()).days
+    today = datetime.now(config.TIMEZONE).date().isoformat()
+    if days_left <= 7 and db.get_state("last_consent_warning") != today:
+        db.set_state("last_consent_warning", today)
+        await dm_admins(bot, messages.consent_expiring(max(days_left, 0)))
+
+
+async def cmd_refresh_payments(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: fetch bank transfers right now instead of waiting for the next
+    scheduled run."""
+    if not is_admin(update.effective_user.id):
+        return
+    if not config.PAYMENTS_ENABLED:
+        await update.message.reply_text("Automatyczne płatności nie są skonfigurowane (brak EB_* w .env).")
+        return
+    try:
+        summary = await sync_payments(context.bot)
+    except bank.BankRateLimited:
+        await update.message.reply_text("Bank ogranicza liczbę odczytów na dobę — spróbuj za kilka godzin.")
+        return
+    except Exception as e:
+        log.exception("Manual payment sync failed")
+        await update.message.reply_text(messages.bank_error_alert(str(e)[:300]))
+        return
+    await update.message.reply_text(f"🔄 {summary}")
+
+
+async def on_payment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin taps on an unmatched-payment alert: "pm:<payment_id>:<user_id>"
+    assigns it to that person, "pm:<payment_id>:x" dismisses it."""
+    query = update.callback_query
+    if not is_admin(query.from_user.id):
+        await query.answer("Tylko admin może to zrobić.", show_alert=True)
+        return
+    _, payment_id_str, target = query.data.split(":")
+    payment_id = int(payment_id_str)
+    await query.answer()
+    if target == "x":
+        done = payments.ignore(payment_id)
+        await query.edit_message_text("🚫 Pominięto." if done else "Ta wpłata została już rozpatrzona.")
+        return
+    participant = db.get_participant(int(target))
+    outcome = payments.assign(payment_id, int(target)) if participant else None
+    if not outcome:
+        await query.edit_message_text("Ta wpłata została już rozpatrzona.")
+        return
+    await query.edit_message_text(
+        messages.payment_assigned(participant["first_name"], outcome.paid_dates, outcome.transfer.amount, outcome.credit)
+    )
+    await announce_payment(context.bot, participant["user_id"], outcome.transfer.amount, outcome.paid_dates, outcome.credit)
+
+
+# ---------- kicking for non-payment ----------
+
+async def kick_from_group(bot, user_id: int):
+    """Removes someone from the group but lets them rejoin: ban, then
+    straight away unban."""
+    await bot.ban_chat_member(chat_id=config.GROUP_CHAT_ID, user_id=user_id)
+    await bot.unban_chat_member(chat_id=config.GROUP_CHAT_ID, user_id=user_id, only_if_banned=True)
+
+
+def bank_data_is_fresh(max_age_hours: int = 9) -> bool:
+    ts = db.get_state("last_sync_ts")
+    if not ts:
+        return False
+    age = datetime.now(config.TIMEZONE) - datetime.fromisoformat(ts)
+    return age <= timedelta(hours=max_age_hours)
+
+
+async def enforce_payment_deadlines(bot, today: date | None = None):
+    """Reminds people who are running out of time (DM at 7 and 2 days left,
+    in the group at 1) and removes those out of time. Never acts on stale
+    bank data: if the bank can't be read and the last good read is old,
+    it does nothing today rather than risk kicking someone who has paid."""
+    today = today or datetime.now(config.TIMEZONE).date()
+    since = db.get_state("enforced_since")
+    if not since:
+        since = today.isoformat()
+        db.set_state("enforced_since", since)
+    enforced_since = date.fromisoformat(since)
+
+    try:
+        await sync_payments(bot)
+    except Exception:
+        log.warning("Pre-enforcement bank sync failed", exc_info=True)
+    if not bank_data_is_fresh():
+        log.warning("Skipping deadline enforcement: bank data is stale.")
+        return
+
+    for p in db.get_active_participants():
+        s = enforcement.standing(p["user_id"], today, enforced_since)
+        if not s:
+            continue
+        if s.days_left <= 0:
+            await kick_participant(bot, p, s)
+            continue
+        stage = enforcement.reminder_stage(s.days_left)
+        if stage is None:
+            continue
+        key = f"kick:{p['user_id']}:{s.clock_start.isoformat()}:{stage}"
+        if db.get_state(key):
+            continue
+        # Mark this stage (and any earlier, longer one we skipped) as done.
+        for st in config.KICK_REMIND_DAYS:
+            if st >= stage:
+                db.set_state(f"kick:{p['user_id']}:{s.clock_start.isoformat()}:{st}", "1")
+        await send_kick_warning(bot, p, s)
+
+
+async def send_kick_warning(bot, p, s):
+    kick_date = enforcement.deadline(s)
+    if s.days_left > 1:
+        try:
+            await bot.send_message(
+                chat_id=p["user_id"],
+                text=messages.kick_warning_dm(p, s.owed, s.days_left, kick_date),
+            )
+            return
+        except Exception:
+            log.info("Could not DM %s the kick warning, using the group instead", p["user_id"])
+    await bot.send_message(
+        chat_id=config.GROUP_CHAT_ID,
+        text=messages.kick_warning_group(p, s.owed, kick_date),
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def kick_participant(bot, p, s):
+    key = f"kick_failed:{p['user_id']}:{s.clock_start.isoformat()}"
+    if db.get_state(key):
+        return  # already tried and told the admins; don't repeat daily
+    try:
+        await kick_from_group(bot, p["user_id"])
+    except Exception as e:
+        log.exception("Could not kick %s", p["user_id"])
+        db.set_state(key, "1")
+        await dm_admins(bot, messages.kick_failed_alert(p, str(e)[:200]))
+        return
+    # Same as /removeparticipant: off the roster, unpaid debt forgiven.
+    db.remove_participant(p["user_id"])
+    db.forgive_unpaid_misses(p["user_id"])
+    await bot.send_message(
+        chat_id=config.GROUP_CHAT_ID,
+        text=messages.kick_announcement(p, s.owed),
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await bot.send_message(chat_id=p["user_id"], text=messages.kick_dm_to_person(p))
+    except Exception:
+        log.info("Could not DM %s after the kick", p["user_id"])
+
+
+async def job_enforce_deadlines(context: ContextTypes.DEFAULT_TYPE):
+    await enforce_payment_deadlines(context.bot)
+
+
 # ---------- error handling ----------
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -950,6 +1205,7 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("podglad", "Podgląd podsumowania końcowego dla grupy"),
     BotCommand("napisz", "Napisz na grupie jako bot"),
     BotCommand("regeneracja", "Oznacz nieobecność jako #regeneracja"),
+    BotCommand("odswiez", "Pobierz wpłaty z banku teraz"),
 ]
 
 
@@ -990,8 +1246,10 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("podglad", cmd_group_summary_preview))
     app.add_handler(CommandHandler("napisz", cmd_say_in_group))
     app.add_handler(CommandHandler("regeneracja", cmd_regeneracja))
+    app.add_handler(CommandHandler("odswiez", cmd_refresh_payments))
     app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
+    app.add_handler(CallbackQueryHandler(on_payment_callback, pattern=r"^pm:"))
     app.add_handler(CallbackQueryHandler(on_admin_callback))
     app.add_error_handler(error_handler)
 
@@ -999,6 +1257,12 @@ def build_application() -> Application:
     app.job_queue.run_daily(job_backup_db, time=time(8, 10, tzinfo=config.TIMEZONE))
     app.job_queue.run_daily(job_reminder, time=time(21, 0, tzinfo=config.TIMEZONE))
     app.job_queue.run_once(catch_up_check, when=5)
+    if config.AUTO_KICK:
+        app.job_queue.run_daily(job_enforce_deadlines, time=time(9, 0, tzinfo=config.TIMEZONE))
+    if config.PAYMENTS_ENABLED:
+        app.job_queue.run_repeating(
+            job_sync_payments, interval=timedelta(hours=config.BANK_SYNC_HOURS), first=60
+        )
 
     return app
 

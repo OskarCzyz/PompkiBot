@@ -1,3 +1,4 @@
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -42,7 +43,36 @@ CREATE TABLE IF NOT EXISTS regen_days (
     regen_date  TEXT NOT NULL,
     PRIMARY KEY (user_id, regen_date)
 );
+
+-- Incoming bank transfers, as read from the bank. tx_id is the bank's own
+-- id, so a transfer seen twice is only ever processed once. Amounts are in
+-- grosze (1/100 PLN). status: applied | unmatched | ignored.
+CREATE TABLE IF NOT EXISTS payments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    tx_id         TEXT NOT NULL UNIQUE,
+    amount        INTEGER NOT NULL,
+    sender        TEXT NOT NULL DEFAULT '',
+    title         TEXT NOT NULL DEFAULT '',
+    booked_on     TEXT NOT NULL,
+    user_id       INTEGER,
+    status        TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
+-- Sender name -> participant, learned when an admin resolves an unmatched
+-- payment by hand, so that person's next transfer matches on its own.
+CREATE TABLE IF NOT EXISTS payer_aliases (
+    alias    TEXT PRIMARY KEY,
+    user_id  INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bank_state (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 """
+
+PAY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
 
 
 @contextmanager
@@ -64,6 +94,26 @@ def init_db():
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(misses)")}
         if "waived" not in cols:
             conn.execute("ALTER TABLE misses ADD COLUMN waived INTEGER NOT NULL DEFAULT 0")
+        # Migrations for databases created before automatic payments existed.
+        pcols = {r["name"] for r in conn.execute("PRAGMA table_info(participants)")}
+        if "pay_code" not in pcols:
+            conn.execute("ALTER TABLE participants ADD COLUMN pay_code TEXT")
+        if "credit" not in pcols:
+            conn.execute("ALTER TABLE participants ADD COLUMN credit INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_pay_code ON participants(pay_code)"
+        )
+        for r in conn.execute("SELECT user_id FROM participants WHERE pay_code IS NULL").fetchall():
+            _assign_pay_code(conn, r["user_id"])
+
+
+def _assign_pay_code(conn, user_id: int) -> str:
+    while True:
+        code = "".join(secrets.choice(PAY_CODE_ALPHABET) for _ in range(4))
+        taken = conn.execute("SELECT 1 FROM participants WHERE pay_code = ?", (code,)).fetchone()
+        if not taken:
+            conn.execute("UPDATE participants SET pay_code = ? WHERE user_id = ?", (code, user_id))
+            return code
 
 
 # ---------- participants ----------
@@ -79,12 +129,24 @@ def add_participant(user_id: int, username: str | None, first_name: str):
                    active=1""",
             (user_id, username, first_name),
         )
+        if conn.execute("SELECT pay_code FROM participants WHERE user_id = ?", (user_id,)).fetchone()["pay_code"] is None:
+            _assign_pay_code(conn, user_id)
 
 
 def get_participant(user_id: int):
     with _conn() as conn:
         return conn.execute(
             "SELECT * FROM participants WHERE user_id = ?", (user_id,)
+        ).fetchone()
+
+
+def get_participant_by_pay_code(code: str):
+    """Deliberately includes removed participants, so a late transfer from
+    someone who was kicked still matches (and the admins get told) instead
+    of showing up as an unknown payment."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM participants WHERE pay_code = ?", (code.upper(),)
         ).fetchone()
 
 
@@ -373,3 +435,96 @@ def get_all_votes():
 def get_all_misses():
     with _conn() as conn:
         return conn.execute("SELECT user_id, miss_date FROM misses").fetchall()
+
+
+# ---------- incoming payments ----------
+
+def insert_payment(tx_id: str, amount: int, sender: str, title: str, booked_on: str,
+                   user_id: int | None, status: str) -> int | None:
+    """Records a bank transfer. Returns its row id, or None if this tx_id
+    was already recorded (i.e. it's been processed before)."""
+    with _conn() as conn:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO payments
+               (tx_id, amount, sender, title, booked_on, user_id, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tx_id, amount, sender, title, booked_on, user_id, status,
+             datetime.now(config.TIMEZONE).isoformat(timespec="seconds")),
+        )
+        return cur.lastrowid if cur.rowcount else None
+
+
+def get_payment(payment_id: int):
+    with _conn() as conn:
+        return conn.execute("SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone()
+
+
+def resolve_payment(payment_id: int, user_id: int | None, status: str):
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE payments SET user_id = ?, status = ? WHERE id = ?",
+            (user_id, status, payment_id),
+        )
+
+
+def get_unmatched_payments():
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM payments WHERE status = 'unmatched' ORDER BY id"
+        ).fetchall()
+
+
+def get_alias(alias: str) -> int | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT user_id FROM payer_aliases WHERE alias = ?", (alias,)).fetchone()
+        return row["user_id"] if row else None
+
+
+def set_alias(alias: str, user_id: int):
+    with _conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO payer_aliases (alias, user_id) VALUES (?, ?)", (alias, user_id)
+        )
+
+
+def get_credit(user_id: int) -> int:
+    with _conn() as conn:
+        row = conn.execute("SELECT credit FROM participants WHERE user_id = ?", (user_id,)).fetchone()
+        return row["credit"] if row else 0
+
+
+def set_credit(user_id: int, grosze: int):
+    with _conn() as conn:
+        conn.execute("UPDATE participants SET credit = ? WHERE user_id = ?", (grosze, user_id))
+
+
+def get_users_with_credit() -> list[int]:
+    with _conn() as conn:
+        rows = conn.execute("SELECT user_id FROM participants WHERE credit > 0 AND active = 1").fetchall()
+        return [r["user_id"] for r in rows]
+
+
+def get_state(key: str) -> str | None:
+    with _conn() as conn:
+        row = conn.execute("SELECT value FROM bank_state WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def set_state(key: str, value: str):
+    with _conn() as conn:
+        conn.execute("INSERT OR REPLACE INTO bank_state (key, value) VALUES (?, ?)", (key, value))
+
+
+def get_last_payment_date(user_id: int) -> str | None:
+    """The most recent day this person paid anything — a day marked paid by
+    hand or a bank transfer booked for them."""
+    with _conn() as conn:
+        row = conn.execute(
+            """SELECT MAX(d) AS d FROM (
+                   SELECT MAX(paid_at) AS d FROM misses WHERE user_id = ? AND paid = 1
+                   UNION ALL
+                   SELECT MAX(booked_on) FROM payments WHERE user_id = ? AND status = 'applied'
+               )""",
+            (user_id, user_id),
+        ).fetchone()
+        return row["d"] if row else None
