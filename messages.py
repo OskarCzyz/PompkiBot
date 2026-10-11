@@ -300,6 +300,13 @@ def credits_list(rows) -> str:
     return "\n".join(lines)
 
 
+def left_with_debt(participant, owed: int) -> str:
+    return (
+        f"ℹ️ {participant['first_name']} opuścił/a grupę, a zostało {owed} PLN niezapłacone. "
+        f"Zdjęto z listy uczestników (dane zachowane, po powrocie wszystko wraca)."
+    )
+
+
 def manual_added(name: str, amount: int, paid_dates: list[str], credit: int, still_owed: int) -> str:
     text = f"✅ Dodano {pln(amount)} dla {name}."
     if paid_dates:

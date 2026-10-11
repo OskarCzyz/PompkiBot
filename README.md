@@ -161,6 +161,12 @@ your own account) and mark penalties paid by itself.
   paid days back on the unpaid list.
 - `/nadplaty` (admin) lists everyone holding a surplus (overpayment not yet
   used), including people who were removed from the group.
+- **Joining and leaving the group is automatic.** Anyone who joins is added
+  to the challenge; anyone who leaves (or is removed) is taken off the
+  roster so they stop collecting misses. Nothing is deleted — misses,
+  payments and the pay code stay, so if they rejoin everything comes back.
+  Admins get a DM if someone leaves with an unpaid debt. (Needs the bot to
+  be a group admin, which it already is for pinning.)
 - Tests: `python -m unittest discover -s tests`.
 
 ## Adding participants

@@ -130,6 +130,63 @@ class ManualMoneyTest(SyncTest):
         self.assertEqual(labels, ["10 PLN", "20 PLN"])
 
 
+class JoinLeaveTest(SyncTest):
+    def user(self, uid, name="Ola", username=None, bot_=False):
+        u = mock.MagicMock()
+        u.id, u.first_name, u.username, u.is_bot = uid, name, username, bot_
+        return u
+
+    def test_join_registers_and_leave_deactivates_but_keeps_data(self):
+        fake = FakeBot()
+        bot.register_member(self.user(7, "Ola"))
+        code = db.get_participant(7)["pay_code"]
+        db.record_miss(7, "2026-10-01")
+        asyncio.run(bot.deregister_member(fake, self.user(7, "Ola")))
+        p = db.get_participant(7)
+        self.assertEqual(p["active"], 0)
+        self.assertEqual(db.get_balance(7)[0], 10)  # debt data kept
+        self.assertEqual([m[0] for m in fake.sent], [99])  # admin told about the debt
+        self.assertIn("10 PLN", fake.sent[0][1])
+        # coming back restores everything
+        bot.register_member(self.user(7, "Ola"))
+        p = db.get_participant(7)
+        self.assertEqual((p["active"], p["pay_code"]), (1, code))
+        self.assertEqual(db.get_balance(7)[0], 10)
+
+    def test_leaving_without_debt_is_quiet_and_idempotent(self):
+        fake = FakeBot()
+        bot.register_member(self.user(8))
+        asyncio.run(bot.deregister_member(fake, self.user(8)))
+        asyncio.run(bot.deregister_member(fake, self.user(8)))
+        self.assertEqual(fake.sent, [])
+        self.assertEqual(db.get_participant(8)["active"], 0)
+
+    def test_bots_and_strangers_ignored(self):
+        fake = FakeBot()
+        bot.register_member(self.user(9, bot_=True))
+        self.assertIsNone(db.get_participant(9))
+        asyncio.run(bot.deregister_member(fake, self.user(12345)))  # never registered
+        self.assertEqual(fake.sent, [])
+
+    def test_chat_member_update_transitions(self):
+        def update(old, new, chat_id=-1, uid=20):
+            u = mock.MagicMock()
+            u.chat_member.chat.id = chat_id
+            u.chat_member.old_chat_member.status = old
+            u.chat_member.new_chat_member.status = new
+            u.chat_member.new_chat_member.user = self.user(uid, "Nowy")
+            return u
+        ctx = mock.MagicMock(bot=FakeBot())
+        asyncio.run(bot.on_chat_member_update(update("left", "member"), ctx))
+        self.assertEqual(db.get_participant(20)["active"], 1)
+        asyncio.run(bot.on_chat_member_update(update("member", "left"), ctx))
+        self.assertEqual(db.get_participant(20)["active"], 0)
+        asyncio.run(bot.on_chat_member_update(update("left", "member", chat_id=-999, uid=21), ctx))
+        self.assertIsNone(db.get_participant(21))  # some other chat
+        asyncio.run(bot.on_chat_member_update(update("member", "administrator"), ctx))
+        self.assertEqual(db.get_participant(20)["active"], 0)  # promotion isn't a join
+
+
 class GroupSilenceTest(unittest.TestCase):
     def test_participant_commands_are_silent_in_groups(self):
         for handler in (bot.cmd_start, bot.cmd_status, bot.cmd_roster,

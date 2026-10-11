@@ -19,6 +19,7 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
+    ChatMemberHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -411,10 +412,58 @@ async def on_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE
     @username nor the reply-to-message method has anything to work with).
     Removing and re-adding an existing member triggers this same event."""
     for member in update.message.new_chat_members:
-        if member.is_bot:
-            continue
-        db.add_participant(member.id, member.username, member.first_name)
-        log.info("Auto-registered %s (%s) via group join event", member.first_name, member.id)
+        register_member(member)
+
+
+def register_member(user):
+    """Someone joined the group: put them on the roster (or bring them back,
+    with everything they had — add_participant only flips them to active)."""
+    if user.is_bot:
+        return
+    db.add_participant(user.id, user.username, user.first_name)
+    log.info("Auto-registered %s (%s) via group join event", user.first_name, user.id)
+
+
+async def deregister_member(bot, user):
+    """Someone left (or was removed from) the group: take them off the roster
+    so they stop collecting misses, but keep all their data — misses,
+    payments, pay code — so nothing is lost if they come back. Admins are
+    told if they walked away with an unpaid debt."""
+    if user.is_bot:
+        return
+    p = db.get_participant(user.id)
+    if not p or not p["active"]:
+        return  # not on the roster, or already handled (e.g. by the kick job)
+    db.remove_participant(user.id)
+    log.info("Deactivated %s (%s): left the group", p["first_name"], user.id)
+    owed = db.get_balance(user.id)[0]
+    if owed:
+        await dm_admins(bot, messages.left_with_debt(p, owed))
+
+
+async def on_left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await deregister_member(context.bot, update.message.left_chat_member)
+
+
+async def on_chat_member_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Join/leave as reported by Telegram's member tracking, which — unlike
+    the "X joined/left" service messages — still arrives when the group
+    hides those. Needs the bot to be a group admin."""
+    change = update.chat_member
+    if change.chat.id != config.GROUP_CHAT_ID:
+        return
+    was_in, is_in = member_is_in(change.old_chat_member), member_is_in(change.new_chat_member)
+    user = change.new_chat_member.user
+    if is_in and not was_in:
+        register_member(user)
+    elif was_in and not is_in:
+        await deregister_member(context.bot, user)
+
+
+def member_is_in(chat_member) -> bool:
+    if chat_member.status in ("member", "administrator", "creator"):
+        return True
+    return chat_member.status == "restricted" and bool(getattr(chat_member, "is_member", False))
 
 
 # ---------- admin commands ----------
@@ -1357,6 +1406,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("zwrot", cmd_remove_payment))
     app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
+    app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_chat_member))
+    app.add_handler(ChatMemberHandler(on_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(on_payment_callback, pattern=r"^pm:"))
     app.add_handler(CallbackQueryHandler(on_admin_callback))
     app.add_error_handler(error_handler)
