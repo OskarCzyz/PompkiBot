@@ -91,6 +91,21 @@ class CopyableTitleTest(SyncTest):
         self.assertIn(want, messages.kick_warning_group(p, 10, date(2026, 10, 20)))
         self.assertIn("&lt;222&gt;", messages.status_reply(10, 0, [], pay_code=self.code))  # escaped
 
+    def test_phone_number_monospace_in_dms_and_absent_from_group(self):
+        import messages
+        config.PAYMENTS_ENABLED = True
+        config.PAY_TO = "BLIK do Jana: +48 730 292 464"
+        p = db.get_participant(1)
+        number = "<code>+48 730 292 464</code>"
+        self.assertIn(number, messages.status_reply(10, 0, [], pay_code=self.code))
+        self.assertIn(number, messages.kick_warning_dm(p, 10, 7, date(2026, 10, 20)))
+        for group_text in (
+            messages.miss_report(date(2026, 10, 1), [p]),
+            messages.kick_warning_group(p, 10, date(2026, 10, 20)),
+        ):
+            self.assertNotIn("730", group_text)
+            self.assertNotIn("292", group_text)
+
 
 if __name__ == "__main__":
     unittest.main()

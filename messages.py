@@ -1,3 +1,4 @@
+import re
 from html import escape
 
 import config
@@ -20,6 +21,17 @@ def poll_question(d) -> str:
     return f"Pompki na dziś! Zrobiłeś już dzisiaj pompki? 💪 — {format_date_pl(d)}"
 
 
+PHONE_RE = re.compile(r"\+?\d[\d \-]{6,}\d")
+
+
+def pay_to_html() -> str:
+    """PAY_TO escaped for HTML, with any phone number in monospace so it can
+    be copied with one tap. Only ever used in private messages — the number
+    stays out of the group chat."""
+    text = escape(config.PAY_TO or "konto organizatora")
+    return PHONE_RE.sub(lambda m: f"<code>{m.group(0)}</code>", text)
+
+
 def mention_html(participant) -> str:
     if participant["username"]:
         return f'@{escape(participant["username"])}'
@@ -40,10 +52,10 @@ def miss_report(day, missed_participants: list, regen_user_ids: set[int] = froze
         f"📋 Podsumowanie dnia {date_str}:\n\n"
         f"Pompek nie zrobili (do zapłaty {config.PENALTY_PLN} PLN):\n{names}"
     )
-    if config.PAYMENTS_ENABLED and config.PAY_TO:
+    if config.PAYMENTS_ENABLED:
         text += (
-            f"\n\n💸 Płatność: {escape(config.PAY_TO)}. W tytule wpisz swój tytuł "
-            f"(dotknij, żeby skopiować) — bot sam zaksięguje wpłatę."
+            "\n\n💸 Dane do wpłaty i swój tytuł znajdziesz po wpisaniu /status w prywatnej "
+            "wiadomości do bota — wpłatę zaksięguje on sam."
         )
     return text
 
@@ -84,7 +96,7 @@ def status_reply(owed: int, paid: int, unpaid_dates: list[str],
     else:
         lines.append("\nBrak niezapłaconych dni. 🎉")
     if config.PAYMENTS_ENABLED and pay_code:
-        lines.append(f"\nPłać na: {escape(config.PAY_TO or 'konto organizatora')}")
+        lines.append(f"\nPłać na: {pay_to_html()}")
         lines.append(f"W tytule wpisz: <code>POMPKI {escape(pay_code)}</code> (dotknij, żeby skopiować)")
         if last_sync:
             lines.append(f"Wpłaty księgują się automatycznie (ostatnia synchronizacja: {last_sync}).")
@@ -210,8 +222,7 @@ def bank_error_alert(error: str) -> str:
 # ---------- kicking for non-payment ----------
 
 def _how_to_pay(participant) -> str:
-    where = escape(config.PAY_TO or "konto organizatora")
-    return f"Płać na: {where}, w tytule: <code>POMPKI {participant['pay_code']}</code>"
+    return f"Płać na: {pay_to_html()}, w tytule: <code>POMPKI {participant['pay_code']}</code>"
 
 
 def kick_warning_dm(participant, owed: int, days_left: int, kick_date) -> str:
@@ -228,7 +239,8 @@ def kick_warning_group(participant, owed: int, kick_date) -> str:
     return (
         f"⚠️ {mention_html(participant)} — zostaje 1 dzień! Masz do zapłaty {owed} PLN. "
         f"Bez wpłaty {format_date_pl(kick_date)} rano zostaniesz usunięty/a z grupy.\n"
-        f"{_how_to_pay(participant)}"
+        f"Twój tytuł przelewu: <code>POMPKI {participant['pay_code']}</code>. "
+        f"Dane do wpłaty: /status w prywatnej wiadomości do bota."
     )
 
 
