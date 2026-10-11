@@ -289,7 +289,11 @@ also be targeted the same ways — plus a fourth, easiest one:
 - `/podsumowanie` (private, unlocks once the challenge ends) — personal
   end-of-challenge stats and chart.
 
-## Group commands (anyone can use these)
+## Commands in the group
+
+The bot stays silent when a participant command (`/start`, `/status`,
+`/uczestnicy`, `/ranking`, `/podsumowanie`) is typed in the group, so a stray
+command can't spam it — use them in a private chat with the bot:
 
 - `/uczestnicy` — lists everyone currently on the roster. Handy for
   double-checking that everyone got registered correctly.

@@ -813,10 +813,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     someone opens a private chat with the bot and taps "Start", so this
     doubles as the natural, zero-friction join flow."""
     if update.effective_chat.type != "private":
-        await update.message.reply_text(
-            "Napisz do mnie prywatnie <code>/start</code>, żeby dołączyć do wyzwania. 🙂",
-            parse_mode=ParseMode.HTML,
-        )
+        # Group chats: stay silent, so a stray command can't spam the group.
         return
     user = update.effective_user
     db.add_participant(user.id, user.username, user.first_name)
@@ -825,7 +822,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
-        await update.message.reply_text("Napisz do mnie prywatnie, żeby sprawdzić swoje saldo. 🙂")
+        # Group chats: stay silent, so a stray command can't spam the group.
         return
     owed, paid, unpaid_dates = db.get_balance(update.effective_user.id)
     p = db.get_participant(update.effective_user.id)
@@ -842,7 +839,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_roster(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
-        await update.message.reply_text("Napisz do mnie prywatnie po listę uczestników. 🙂")
+        # Group chats: stay silent, so a stray command can't spam the group.
         return
     participants = db.get_active_participants()
     await update.message.reply_text(
@@ -852,7 +849,7 @@ async def cmd_roster(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
-        await update.message.reply_text("Napisz do mnie prywatnie po ranking. 🙂")
+        # Group chats: stay silent, so a stray command can't spam the group.
         return
     owing_only = bool(context.args) and context.args[0].lower() == "zalegli"
     if context.args and not owing_only:
@@ -877,10 +874,7 @@ async def cmd_personal_summary(update: Update, context: ContextTypes.DEFAULT_TYP
     """Anyone's own end-of-challenge stats + chart, in a private chat. Only
     unlocked once the challenge is over (admins can peek any time)."""
     if update.effective_chat.type != "private":
-        await update.message.reply_text(
-            "Napisz do mnie prywatnie <code>/podsumowanie</code> po swoje statystyki. 🙂",
-            parse_mode=ParseMode.HTML,
-        )
+        # Group chats: stay silent, so a stray command can't spam the group.
         return
     user_id = update.effective_user.id
     if not challenge_finished() and not is_admin(user_id):

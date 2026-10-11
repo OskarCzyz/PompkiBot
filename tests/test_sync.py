@@ -94,6 +94,18 @@ class SyncTest(unittest.TestCase):
         self.assertIn("nie mogłem wysłać", fake.sent[0][1])
 
 
+class GroupSilenceTest(unittest.TestCase):
+    def test_participant_commands_are_silent_in_groups(self):
+        for handler in (bot.cmd_start, bot.cmd_status, bot.cmd_roster,
+                        bot.cmd_leaderboard, bot.cmd_personal_summary):
+            update = mock.MagicMock()
+            update.effective_chat.type = "supergroup"
+            update.effective_user.id = 5
+            update.message.reply_text = mock.AsyncMock()
+            asyncio.run(handler(update, mock.MagicMock(args=[])))
+            update.message.reply_text.assert_not_called()
+
+
 class CopyableTitleTest(SyncTest):
     def test_title_is_one_tap_copy_everywhere(self):
         import messages
