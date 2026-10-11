@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import date
 import sys
 import tempfile
 import unittest
@@ -75,6 +76,20 @@ class SyncTest(unittest.TestCase):
         summary, fake = self.sync([])
         self.assertEqual(len([m for m in fake.sent if m[0] == -1]), 1)
         self.assertEqual(db.get_balance(1)[2], [])
+
+
+class CopyableTitleTest(SyncTest):
+    def test_title_is_one_tap_copy_everywhere(self):
+        import messages
+        config.PAYMENTS_ENABLED = True
+        config.PAY_TO = "BLIK +48 111 <222>"
+        p = db.get_participant(1)
+        want = f"<code>POMPKI {self.code}</code>"
+        self.assertIn(want, messages.miss_report(date(2026, 10, 1), [p]))
+        self.assertIn(want, messages.status_reply(10, 0, ["2026-10-01"], pay_code=self.code))
+        self.assertIn(want, messages.kick_warning_dm(p, 10, 7, date(2026, 10, 20)))
+        self.assertIn(want, messages.kick_warning_group(p, 10, date(2026, 10, 20)))
+        self.assertIn("&lt;222&gt;", messages.status_reply(10, 0, [], pay_code=self.code))  # escaped
 
 
 if __name__ == "__main__":

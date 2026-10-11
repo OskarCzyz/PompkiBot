@@ -32,7 +32,7 @@ def miss_report(day, missed_participants: list, regen_user_ids: set[int] = froze
         return f"🎉 Brawo! {date_str} — wszyscy zrobili pompki!"
     names = "\n".join(
         f"• {mention_html(p)}"
-        + (f" — kod: <code>{p['pay_code']}</code>" if config.PAYMENTS_ENABLED and p["pay_code"] else "")
+        + (f" — w tytule: <code>POMPKI {p['pay_code']}</code>" if config.PAYMENTS_ENABLED and p["pay_code"] else "")
         + (REGEN_TAG if p["user_id"] in regen_user_ids else "")
         for p in missed_participants
     )
@@ -42,8 +42,8 @@ def miss_report(day, missed_participants: list, regen_user_ids: set[int] = froze
     )
     if config.PAYMENTS_ENABLED and config.PAY_TO:
         text += (
-            f"\n\n💸 Płatność: {escape(config.PAY_TO)}, w tytule: "
-            f"<code>POMPKI &lt;twój kod&gt;</code> — bot sam zaksięguje wpłatę."
+            f"\n\n💸 Płatność: {escape(config.PAY_TO)}. W tytule wpisz swój tytuł "
+            f"(dotknij, żeby skopiować) — bot sam zaksięguje wpłatę."
         )
     return text
 
@@ -84,8 +84,8 @@ def status_reply(owed: int, paid: int, unpaid_dates: list[str],
     else:
         lines.append("\nBrak niezapłaconych dni. 🎉")
     if config.PAYMENTS_ENABLED and pay_code:
-        lines.append(f"\nPłać na: {config.PAY_TO or 'konto organizatora'}")
-        lines.append(f"W tytule wpisz: POMPKI {pay_code}")
+        lines.append(f"\nPłać na: {escape(config.PAY_TO or 'konto organizatora')}")
+        lines.append(f"W tytule wpisz: <code>POMPKI {escape(pay_code)}</code> (dotknij, żeby skopiować)")
         if last_sync:
             lines.append(f"Wpłaty księgują się automatycznie (ostatnia synchronizacja: {last_sync}).")
     return "\n".join(lines)
@@ -210,8 +210,8 @@ def bank_error_alert(error: str) -> str:
 # ---------- kicking for non-payment ----------
 
 def _how_to_pay(participant) -> str:
-    where = config.PAY_TO or "konto organizatora"
-    return f"Płać na: {where}, w tytule: POMPKI {participant['pay_code']}"
+    where = escape(config.PAY_TO or "konto organizatora")
+    return f"Płać na: {where}, w tytule: <code>POMPKI {participant['pay_code']}</code>"
 
 
 def kick_warning_dm(participant, owed: int, days_left: int, kick_date) -> str:
@@ -228,7 +228,7 @@ def kick_warning_group(participant, owed: int, kick_date) -> str:
     return (
         f"⚠️ {mention_html(participant)} — zostaje 1 dzień! Masz do zapłaty {owed} PLN. "
         f"Bez wpłaty {format_date_pl(kick_date)} rano zostaniesz usunięty/a z grupy.\n"
-        f"{escape(_how_to_pay(participant))}"
+        f"{_how_to_pay(participant)}"
     )
 
 

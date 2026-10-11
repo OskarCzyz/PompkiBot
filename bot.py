@@ -834,7 +834,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pay_code=p["pay_code"] if p else None,
             credit=db.get_credit(update.effective_user.id),
             last_sync=db.get_state("last_sync_at"),
-        )
+        ),
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -1132,6 +1133,7 @@ async def send_kick_warning(bot, p, s):
             await bot.send_message(
                 chat_id=p["user_id"],
                 text=messages.kick_warning_dm(p, s.owed, s.days_left, kick_date),
+                parse_mode=ParseMode.HTML,
             )
             return
         except Exception:
