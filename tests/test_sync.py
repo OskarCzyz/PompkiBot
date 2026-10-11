@@ -91,6 +91,20 @@ class CopyableTitleTest(SyncTest):
         self.assertIn(want, messages.kick_warning_group(p, 10, date(2026, 10, 20)))
         self.assertIn("&lt;222&gt;", messages.status_reply(10, 0, [], pay_code=self.code))  # escaped
 
+    def test_group_messages_have_no_clickable_commands(self):
+        import re
+
+        import messages
+        config.PAYMENTS_ENABLED = True
+        p = db.get_participant(1)
+        for text in (
+            messages.miss_report(date(2026, 10, 1), [p]),
+            messages.kick_warning_group(p, 10, date(2026, 10, 20)),
+        ):
+            outside_code = re.sub(r"<code>.*?</code>", "", text)
+            self.assertIsNone(re.search(r"(?<![\w/])/[a-z]{3,}", outside_code), text)
+            self.assertIn("<code>/status</code>", text)
+
     def test_phone_number_monospace_in_dms_and_absent_from_group(self):
         import messages
         config.PAYMENTS_ENABLED = True

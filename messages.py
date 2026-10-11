@@ -54,7 +54,7 @@ def miss_report(day, missed_participants: list, regen_user_ids: set[int] = froze
     )
     if config.PAYMENTS_ENABLED:
         text += (
-            "\n\n💸 Dane do wpłaty i swój tytuł znajdziesz po wpisaniu /status w prywatnej "
+            "\n\n💸 Dane do wpłaty i swój tytuł znajdziesz po wpisaniu <code>/status</code> w prywatnej "
             "wiadomości do bota — wpłatę zaksięguje on sam."
         )
     return text
@@ -240,7 +240,7 @@ def kick_warning_group(participant, owed: int, kick_date) -> str:
         f"⚠️ {mention_html(participant)} — zostaje 1 dzień! Masz do zapłaty {owed} PLN. "
         f"Bez wpłaty {format_date_pl(kick_date)} rano zostaniesz usunięty/a z grupy.\n"
         f"Twój tytuł przelewu: <code>POMPKI {participant['pay_code']}</code>. "
-        f"Dane do wpłaty: /status w prywatnej wiadomości do bota."
+        f"Dane do wpłaty: <code>/status</code> w prywatnej wiadomości do bota."
     )
 
 

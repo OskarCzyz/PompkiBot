@@ -814,7 +814,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doubles as the natural, zero-friction join flow."""
     if update.effective_chat.type != "private":
         await update.message.reply_text(
-            "Napisz do mnie prywatnie /start, żeby dołączyć do wyzwania. 🙂"
+            "Napisz do mnie prywatnie <code>/start</code>, żeby dołączyć do wyzwania. 🙂",
+            parse_mode=ParseMode.HTML,
         )
         return
     user = update.effective_user
@@ -876,7 +877,10 @@ async def cmd_personal_summary(update: Update, context: ContextTypes.DEFAULT_TYP
     """Anyone's own end-of-challenge stats + chart, in a private chat. Only
     unlocked once the challenge is over (admins can peek any time)."""
     if update.effective_chat.type != "private":
-        await update.message.reply_text("Napisz do mnie prywatnie /podsumowanie po swoje statystyki. 🙂")
+        await update.message.reply_text(
+            "Napisz do mnie prywatnie <code>/podsumowanie</code> po swoje statystyki. 🙂",
+            parse_mode=ParseMode.HTML,
+        )
         return
     user_id = update.effective_user.id
     if not challenge_finished() and not is_admin(user_id):

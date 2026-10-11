@@ -332,7 +332,7 @@ def stats_text(stats: ChallengeStats) -> str:
         lines.append("\n🔍 <b>Ciekawostki</b>")
         lines.extend(oddities)
 
-    lines.append("\nKażdy może teraz napisać do mnie prywatnie /podsumowanie po swoje osobiste statystyki. 📬")
+    lines.append("\nKażdy może teraz napisać do mnie prywatnie <code>/podsumowanie</code> po swoje osobiste statystyki. 📬")
     return "\n".join(lines)
 
 
