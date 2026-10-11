@@ -183,6 +183,31 @@ def payment_received(participant, amount: int, paid_dates: list[str], credit: in
     return text
 
 
+def payment_thanks(amount: int, paid_dates: list[str], credit: int, still_owed: int) -> str:
+    """Private thank-you to the person who paid — payments are never
+    announced in the group."""
+    if amount:
+        text = f"🎉 Dziękujemy za sponsorowanie festu! Wpłata {pln(amount)} zaksięgowana."
+    else:
+        text = "🎉 Dziękujemy za sponsorowanie festu! Twoja nadpłata pokryła kolejne dni."
+    if paid_dates:
+        text += f"\nRozliczone dni: {', '.join(paid_dates)}."
+    if credit:
+        text += f"\nNadpłata {pln(credit)} zaliczy się na kolejne dni."
+    if still_owed:
+        text += f"\nZostało do zapłaty: {still_owed} PLN."
+    elif paid_dates:
+        text += "\nWszystko rozliczone! 💪"
+    return text
+
+
+def thanks_not_delivered(participant, amount: int) -> str:
+    return (
+        f"ℹ️ Zaksięgowano {pln(amount)} dla {participant['first_name']}, ale nie mogłem wysłać "
+        f"podziękowania prywatnie (nie rozpoczął/ęła rozmowy z botem)."
+    )
+
+
 def unmatched_payment_alert(row) -> str:
     return (
         f"❓ Wpłata bez dopasowania: {pln(row['amount'])}\n"

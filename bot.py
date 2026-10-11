@@ -954,20 +954,28 @@ async def dm_admins(bot, text: str, **kwargs):
 
 
 async def announce_payment(bot, user_id: int, amount: int, paid_dates: list[str], credit: int):
+    """Thanks the person privately. Nothing about payments goes in the group."""
     participant = db.get_participant(user_id)
     still_owed = db.get_balance(user_id)[0]
-    text = messages.payment_received(participant, amount, paid_dates, credit, still_owed)
     if not participant["active"]:
-        # Someone who was removed (e.g. kicked) — don't ping them in a group
-        # they're no longer in; just tell the admins.
+        # Someone who was removed (e.g. kicked): no thank-you, just tell the admins.
+        text = messages.payment_received(participant, amount, paid_dates, credit, still_owed)
         await dm_admins(bot, text, parse_mode=ParseMode.HTML)
         return
-    await bot.send_message(chat_id=config.GROUP_CHAT_ID, text=text, parse_mode=ParseMode.HTML)
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text=messages.payment_thanks(amount, paid_dates, credit, still_owed),
+        )
+    except Exception:
+        # They never opened a chat with the bot, so it can't DM them.
+        log.info("Could not DM %s the payment thank-you", user_id)
+        await dm_admins(bot, messages.thanks_not_delivered(participant, amount))
 
 
 async def sync_payments(bot) -> str:
-    """Pulls new incoming transfers from the bank, books them, announces
-    them in the group and asks the admins about the ones it can't place.
+    """Pulls new incoming transfers from the bank, books them, thanks the
+    payers privately and asks the admins about the ones it can't place.
     Returns a one-line summary. Raises bank.BankError if the bank can't be
     read."""
     since = db.get_state("sync_from")

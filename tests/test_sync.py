@@ -56,11 +56,14 @@ class SyncTest(unittest.TestCase):
         ])
         self.assertEqual(summary, "Nowe wpłaty: 2 (zaksięgowane: 1, bez dopasowania: 1).")
         group = [m for m in fake.sent if m[0] == -1]
-        dms = [m for m in fake.sent if m[0] == 99]
-        self.assertEqual(len(group), 1)
-        self.assertIn("2026-10-01", group[0][1])
-        self.assertEqual(len(dms), 1)
-        self.assertIn("Wpłata bez dopasowania", dms[0][1])
+        thanks = [m for m in fake.sent if m[0] == 1]
+        admin = [m for m in fake.sent if m[0] == 99]
+        self.assertEqual(group, [])  # payments are never announced in the group
+        self.assertEqual(len(thanks), 1)
+        self.assertIn("Dziękujemy za sponsorowanie festu", thanks[0][1])
+        self.assertIn("2026-10-01", thanks[0][1])
+        self.assertEqual(len(admin), 1)
+        self.assertIn("Wpłata bez dopasowania", admin[0][1])
 
     def test_second_sync_is_idempotent(self):
         t = [Transfer("1", 1000, "Jan", f"POMPKI {self.code}", "2026-10-11")]
@@ -74,8 +77,21 @@ class SyncTest(unittest.TestCase):
         self.sync([Transfer("1", 5000, "Jan", f"POMPKI {self.code}", "2026-10-11")])
         db.record_miss(1, "2026-10-05")
         summary, fake = self.sync([])
-        self.assertEqual(len([m for m in fake.sent if m[0] == -1]), 1)
+        self.assertEqual([m[0] for m in fake.sent], [1])
+        self.assertIn("nadpłata", fake.sent[0][1].lower())
         self.assertEqual(db.get_balance(1)[2], [])
+
+    def test_undeliverable_thanks_tells_admin(self):
+        class NoDM(FakeBot):
+            async def send_message(self, chat_id, text, **kw):
+                if chat_id == 1:
+                    raise RuntimeError("bot can't initiate conversation")
+                await super().send_message(chat_id, text, **kw)
+
+        fake = NoDM()
+        asyncio.run(bot.announce_payment(fake, 1, 1000, ["2026-10-01"], 0))
+        self.assertEqual([m[0] for m in fake.sent], [99])
+        self.assertIn("nie mogłem wysłać", fake.sent[0][1])
 
 
 class CopyableTitleTest(SyncTest):

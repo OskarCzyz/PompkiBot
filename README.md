@@ -127,7 +127,8 @@ your own account) and mark penalties paid by itself.
   phone number works too).
 - Every 8 hours the bot fetches new incoming transfers, matches them by code
   (or by sender name, which it learns), pays off the oldest unpaid days
-  (`amount / PENALTY_PLN`) and announces it in the group. Overpayments carry
+  (`amount / PENALTY_PLN`) and thanks the payer in a private message (nothing about payments is
+  posted in the group). Overpayments carry
   over to future misses; partial payments add up.
 - Transfers it can't place go to the admins as a DM with a person picker;
   the choice is remembered for that sender. Unrelated income (salary etc.)
