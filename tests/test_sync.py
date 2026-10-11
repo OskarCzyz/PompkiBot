@@ -94,6 +94,34 @@ class SyncTest(unittest.TestCase):
         self.assertIn("nie mogłem wysłać", fake.sent[0][1])
 
 
+class ManualMoneyTest(SyncTest):
+    def test_parse_amount(self):
+        self.assertEqual(bot.parse_amount_grosze("25"), 2500)
+        self.assertEqual(bot.parse_amount_grosze("12,5"), 1250)
+        self.assertIsNone(bot.parse_amount_grosze("-5"))
+        self.assertIsNone(bot.parse_amount_grosze("abc"))
+        self.assertIsNone(bot.parse_amount_grosze("0"))
+
+    def test_add_then_remove_via_bot_helpers(self):
+        fake = FakeBot()
+        p = db.get_participant(1)
+        text = asyncio.run(bot.apply_manual(fake, "wp", p, 2000))
+        self.assertIn("Dodano 20 PLN", text)
+        self.assertEqual(db.get_balance(1)[2], [])
+        self.assertEqual([m[0] for m in fake.sent], [1])  # the person is thanked privately
+        text = asyncio.run(bot.apply_manual(fake, "zw", p, 1000))
+        self.assertIn("Odjęto 10 PLN", text)
+        self.assertEqual(len(db.get_balance(1)[2]), 1)
+        self.assertEqual(len(fake.sent), 1)  # no thank-you for a removal
+        self.assertIn("nie wpłaciła", asyncio.run(bot.apply_manual(fake, "zw", p, 999900)))
+
+    def test_amount_keyboard_for_refund_only_offers_what_is_paid(self):
+        payments.add_manual(1, 2000)
+        kb = bot.manual_amount_keyboard("zw", 1)
+        labels = [b.text for row in kb.inline_keyboard for b in row]
+        self.assertEqual(labels, ["10 PLN", "20 PLN"])
+
+
 class GroupSilenceTest(unittest.TestCase):
     def test_participant_commands_are_silent_in_groups(self):
         for handler in (bot.cmd_start, bot.cmd_status, bot.cmd_roster,

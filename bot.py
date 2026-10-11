@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal, InvalidOperation
 
 from telegram import (
     BotCommand,
@@ -606,6 +607,81 @@ async def cmd_unmarkpaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Nie znaleziono zapłaconego długu na tę datę.")
 
 
+# ---------- manual money corrections (/wplata, /zwrot) ----------
+
+MANUAL_AMOUNTS_PLN = (10, 20, 30, 50, 100)
+MANUAL_LABELS = {
+    "wp": "Ile PLN dodać dla {name}? (inna kwota: /wplata @osoba 25)",
+    "zw": "Ile PLN odjąć od {name}? (inna kwota: /zwrot @osoba 25)",
+}
+
+
+def parse_amount_grosze(text: str) -> int | None:
+    """'25', '12,5' or '12.50' -> grosze. None if it isn't a sane positive amount."""
+    try:
+        value = Decimal(text.strip().replace(",", "."))
+    except InvalidOperation:
+        return None
+    grosze = int((value * 100).to_integral_value())
+    return grosze if 0 < grosze <= 1_000_000 else None
+
+
+def manual_amount_keyboard(action: str, user_id: int) -> InlineKeyboardMarkup:
+    limit = payments.refundable(user_id) if action == "zw" else None
+    amounts = [a for a in MANUAL_AMOUNTS_PLN if limit is None or a * 100 <= limit]
+    buttons = [
+        InlineKeyboardButton(f"{a} PLN", callback_data=f"{action}:{user_id}:{a * 100}")
+        for a in amounts
+    ]
+    return InlineKeyboardMarkup([buttons[i : i + 3] for i in range(0, len(buttons), 3)])
+
+
+async def apply_manual(bot, action: str, participant, grosze: int) -> str:
+    """Runs a manual add (/wplata) or remove (/zwrot) and returns the text
+    for the admin. A manual add also thanks the person, like a bank transfer."""
+    user_id, name = participant["user_id"], participant["first_name"]
+    if action == "wp":
+        adj = payments.add_manual(user_id, grosze)
+        owed = db.get_balance(user_id)[0]
+        if participant["active"]:
+            await announce_payment(bot, user_id, grosze, adj.paid_dates, adj.credit)
+        return messages.manual_added(name, grosze, adj.paid_dates, adj.credit, owed)
+    adj = payments.remove_manual(user_id, grosze)
+    if adj.error:
+        return adj.error
+    owed = db.get_balance(user_id)[0]
+    return messages.manual_removed(name, grosze, adj.unpaid_dates, adj.credit, owed)
+
+
+async def cmd_manual_money(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
+    if not is_admin(update.effective_user.id):
+        return
+    target, args = resolve_target(update, context)
+    if not target:
+        prompt = "Komu dodać wpłatę?" if action == "wp" else "Komu odjąć kwotę?"
+        await send_participant_picker(update, action, prompt)
+        return
+    if not args:
+        await update.message.reply_text(
+            MANUAL_LABELS[action].format(name=target["first_name"]),
+            reply_markup=manual_amount_keyboard(action, target["user_id"]),
+        )
+        return
+    grosze = parse_amount_grosze(args[0])
+    if grosze is None:
+        await update.message.reply_text("Nieprawidłowa kwota, wpisz np. 20 lub 12,50.")
+        return
+    await update.message.reply_text(await apply_manual(context.bot, action, target, grosze))
+
+
+async def cmd_add_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_manual_money(update, context, "wp")
+
+
+async def cmd_remove_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await cmd_manual_money(update, context, "zw")
+
+
 async def cmd_markdone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
@@ -698,6 +774,16 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "rg":
         await query.edit_message_text(await apply_regen_today(context.bot, participant))
+        return
+
+    if action in ("wp", "zw"):
+        if not rest:
+            await query.edit_message_text(
+                MANUAL_LABELS[action].format(name=name),
+                reply_markup=manual_amount_keyboard(action, user_id),
+            )
+            return
+        await query.edit_message_text(await apply_manual(context.bot, action, participant, int(rest[0])))
         return
 
     if action == "rm":
@@ -1215,6 +1301,8 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("napisz", "Napisz na grupie jako bot"),
     BotCommand("regeneracja", "Oznacz nieobecność jako #regeneracja"),
     BotCommand("odswiez", "Pobierz wpłaty z banku teraz"),
+    BotCommand("wplata", "Dodaj wpłatę ręcznie"),
+    BotCommand("zwrot", "Odejmij kwotę (pomyłka / zwrot)"),
 ]
 
 
@@ -1256,6 +1344,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("napisz", cmd_say_in_group))
     app.add_handler(CommandHandler("regeneracja", cmd_regeneracja))
     app.add_handler(CommandHandler("odswiez", cmd_refresh_payments))
+    app.add_handler(CommandHandler("wplata", cmd_add_payment))
+    app.add_handler(CommandHandler("zwrot", cmd_remove_payment))
     app.add_handler(PollAnswerHandler(on_poll_answer))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
     app.add_handler(CallbackQueryHandler(on_payment_callback, pattern=r"^pm:"))

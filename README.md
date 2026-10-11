@@ -151,6 +151,14 @@ your own account) and mark penalties paid by itself.
   Admins are exempt. Checked daily at 09:00, and only on fresh bank data.
   The bot needs the **"Ban users"** admin right in the group. Turn it off
   with `AUTO_KICK=0`.
+- **Manual corrections** (admin): `/wplata` adds money to someone's account
+  (they paid in cash or another way, or the bot missed a transfer) and
+  `/zwrot` takes it back (a mis-click, a refund). Both work as buttons
+  (person, then 10/20/30/50/100 PLN) or typed: `/wplata @ania 25`,
+  `/zwrot @ania 12,50`. Adding behaves exactly like a bank transfer (oldest
+  unpaid days first, the rest becomes credit, the person gets the private
+  thank-you). Removing uses up credit first, then puts the most recently
+  paid days back on the unpaid list.
 - Tests: `python -m unittest discover -s tests`.
 
 ## Adding participants

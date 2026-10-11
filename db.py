@@ -523,7 +523,8 @@ def get_last_payment_date(user_id: int) -> str | None:
             """SELECT MAX(d) AS d FROM (
                    SELECT MAX(paid_at) AS d FROM misses WHERE user_id = ? AND paid = 1
                    UNION ALL
-                   SELECT MAX(booked_on) FROM payments WHERE user_id = ? AND status = 'applied'
+                   SELECT MAX(booked_on) FROM payments
+                   WHERE user_id = ? AND status = 'applied' AND amount > 0
                )""",
             (user_id, user_id),
         ).fetchone()

@@ -6,7 +6,9 @@ announces the outcomes.
 """
 import re
 import unicodedata
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import config
 import db
@@ -137,3 +139,56 @@ def ignore(payment_id: int) -> bool:
         return False
     db.resolve_payment(payment_id, None, "ignored")
     return True
+
+
+# ---------- manual corrections by an admin ----------
+
+@dataclass
+class Adjustment:
+    error: str = ""
+    paid_dates: list[str] = field(default_factory=list)    # days newly paid (money added)
+    unpaid_dates: list[str] = field(default_factory=list)  # days put back to unpaid (money removed)
+    credit: int = 0                                         # grosze of credit afterwards
+
+
+def _record_manual(user_id: int, grosze: int, note: str):
+    db.insert_payment(
+        f"manual-{uuid.uuid4().hex}", grosze, "ręcznie (admin)", note,
+        datetime.now(config.TIMEZONE).date().isoformat(), user_id, "applied",
+    )
+
+
+def add_manual(user_id: int, grosze: int, note: str = "wpłata dodana ręcznie") -> Adjustment:
+    """The person paid some other way (cash, another account) or a transfer
+    was missed: books `grosze` exactly like a bank transfer would."""
+    _record_manual(user_id, grosze, note)
+    paid, credit = settle(user_id, grosze)
+    return Adjustment(paid_dates=paid, credit=credit)
+
+
+def refundable(user_id: int) -> int:
+    """Grosze that can be taken back: their credit plus every paid day."""
+    price = config.PENALTY_PLN * 100
+    return db.get_credit(user_id) + len(db.get_recent_paid_dates(user_id, limit=100000)) * price
+
+
+def remove_manual(user_id: int, grosze: int, note: str = "zwrot / korekta ręczna") -> Adjustment:
+    """Takes `grosze` back (a mis-click, a refund): credit goes first, then
+    the most recently paid days are put back on the unpaid list. If that
+    over-reverses (a day is worth PENALTY_PLN), the difference becomes
+    credit."""
+    price = config.PENALTY_PLN * 100
+    if grosze > refundable(user_id):
+        return Adjustment(error="Ta osoba nie wpłaciła aż tyle.")
+    credit = db.get_credit(user_id)
+    from_credit = min(credit, grosze)
+    rest = grosze - from_credit
+    days = -(-rest // price)  # ceil
+    reverted = []
+    for d in db.get_recent_paid_dates(user_id, limit=days):
+        if db.unmark_paid(user_id, d):
+            reverted.append(d)
+    new_credit = credit - from_credit + (len(reverted) * price - rest)
+    db.set_credit(user_id, new_credit)
+    _record_manual(user_id, -grosze, note)
+    return Adjustment(unpaid_dates=sorted(reverted), credit=new_credit)

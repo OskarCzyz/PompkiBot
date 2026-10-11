@@ -93,6 +93,43 @@ class PaymentsTest(unittest.TestCase):
         self.assertEqual(out.paid_dates, [])
         self.assertEqual(out.credit, 1000)
 
+    def test_manual_add_books_like_a_transfer(self):
+        adj = payments.add_manual(1, 2500)
+        self.assertEqual(adj.paid_dates, ["2026-10-01", "2026-10-02"])
+        self.assertEqual(adj.credit, 500)
+        self.assertEqual(db.get_credit(1), 500)
+
+    def test_manual_remove_reverts_latest_paid_days(self):
+        payments.add_manual(1, 3000)  # all three days paid
+        adj = payments.remove_manual(1, 1000)
+        self.assertEqual(adj.unpaid_dates, ["2026-10-03"])
+        self.assertEqual(db.get_balance(1)[2], ["2026-10-03"])
+        self.assertEqual(adj.credit, 0)
+
+    def test_manual_remove_takes_credit_first(self):
+        payments.add_manual(1, 3500)  # 3 days + 5 PLN credit
+        adj = payments.remove_manual(1, 500)
+        self.assertEqual((adj.unpaid_dates, adj.credit), ([], 0))
+        self.assertEqual(db.get_balance(1)[2], [])
+
+    def test_manual_remove_partial_day_leaves_change_as_credit(self):
+        payments.add_manual(1, 1000)
+        adj = payments.remove_manual(1, 400)
+        self.assertEqual(adj.unpaid_dates, ["2026-10-01"])
+        self.assertEqual(adj.credit, 600)  # the day is unpaid again, 6 PLN of it stays as credit
+
+    def test_manual_remove_more_than_paid_is_refused(self):
+        payments.add_manual(1, 1000)
+        adj = payments.remove_manual(1, 1100)
+        self.assertTrue(adj.error)
+        self.assertEqual(db.get_balance(1)[1], 10)  # untouched
+
+    def test_refund_does_not_reset_the_kick_clock(self):
+        payments.add_manual(1, 1000)
+        before = db.get_last_payment_date(1)
+        db.insert_payment("later", -500, "x", "refund", "2099-01-01", 1, "applied")
+        self.assertEqual(db.get_last_payment_date(1), before)
+
     def test_ignore(self):
         out = payments.process(tr(title="?"))
         self.assertTrue(payments.ignore(out.payment_id))

@@ -284,3 +284,25 @@ def kick_dm_to_person(participant) -> str:
 
 def kick_failed_alert(participant, error: str) -> str:
     return f"⚠️ Nie udało się usunąć {participant['first_name']} z grupy: {error}"
+
+
+# ---------- manual corrections ----------
+
+def manual_added(name: str, amount: int, paid_dates: list[str], credit: int, still_owed: int) -> str:
+    text = f"✅ Dodano {pln(amount)} dla {name}."
+    if paid_dates:
+        text += f"\nRozliczone dni: {', '.join(paid_dates)}."
+    if credit:
+        text += f"\nNadpłata: {pln(credit)}."
+    text += f"\nZostało do zapłaty: {still_owed} PLN."
+    return text
+
+
+def manual_removed(name: str, amount: int, unpaid_dates: list[str], credit: int, still_owed: int) -> str:
+    text = f"↩️ Odjęto {pln(amount)} od {name}."
+    if unpaid_dates:
+        text += f"\nDni znów niezapłacone: {', '.join(unpaid_dates)}."
+    if credit:
+        text += f"\nNadpłata: {pln(credit)}."
+    text += f"\nDo zapłaty: {still_owed} PLN."
+    return text
