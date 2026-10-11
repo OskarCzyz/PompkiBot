@@ -498,6 +498,15 @@ def set_credit(user_id: int, grosze: int):
         conn.execute("UPDATE participants SET credit = ? WHERE user_id = ?", (grosze, user_id))
 
 
+def get_credits():
+    """Everyone holding credit (an overpayment not yet used), biggest first —
+    removed participants included, since that money is still theirs."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM participants WHERE credit > 0 ORDER BY credit DESC, first_name"
+        ).fetchall()
+
+
 def get_users_with_credit() -> list[int]:
     with _conn() as conn:
         rows = conn.execute("SELECT user_id FROM participants WHERE credit > 0 AND active = 1").fetchall()

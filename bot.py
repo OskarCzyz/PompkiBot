@@ -674,6 +674,13 @@ async def cmd_manual_money(update: Update, context: ContextTypes.DEFAULT_TYPE, a
     await update.message.reply_text(await apply_manual(context.bot, action, target, grosze))
 
 
+async def cmd_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: who has paid more than they owe."""
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text(messages.credits_list(db.get_credits()), parse_mode=ParseMode.HTML)
+
+
 async def cmd_add_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cmd_manual_money(update, context, "wp")
 
@@ -1301,6 +1308,7 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("napisz", "Napisz na grupie jako bot"),
     BotCommand("regeneracja", "Oznacz nieobecność jako #regeneracja"),
     BotCommand("odswiez", "Pobierz wpłaty z banku teraz"),
+    BotCommand("nadplaty", "Kto ma nadpłatę"),
     BotCommand("wplata", "Dodaj wpłatę ręcznie"),
     BotCommand("zwrot", "Odejmij kwotę (pomyłka / zwrot)"),
 ]
@@ -1344,6 +1352,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("napisz", cmd_say_in_group))
     app.add_handler(CommandHandler("regeneracja", cmd_regeneracja))
     app.add_handler(CommandHandler("odswiez", cmd_refresh_payments))
+    app.add_handler(CommandHandler("nadplaty", cmd_credits))
     app.add_handler(CommandHandler("wplata", cmd_add_payment))
     app.add_handler(CommandHandler("zwrot", cmd_remove_payment))
     app.add_handler(PollAnswerHandler(on_poll_answer))

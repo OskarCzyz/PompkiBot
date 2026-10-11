@@ -288,6 +288,18 @@ def kick_failed_alert(participant, error: str) -> str:
 
 # ---------- manual corrections ----------
 
+def credits_list(rows) -> str:
+    if not rows:
+        return "Nikt nie ma nadpłaty."
+    lines = ["<b>Nadpłaty</b> (pieniądze wpłacone na zapas):", ""]
+    for p in rows:
+        who = escape(p["first_name"]) + (f" (@{escape(p['username'])})" if p["username"] else "")
+        left = "" if p["active"] else " — usunięty/a z grupy"
+        lines.append(f"• {who}: {pln(p['credit'])}{left}")
+    lines.append(f"\nŁącznie: {pln(sum(p['credit'] for p in rows))}")
+    return "\n".join(lines)
+
+
 def manual_added(name: str, amount: int, paid_dates: list[str], credit: int, still_owed: int) -> str:
     text = f"✅ Dodano {pln(amount)} dla {name}."
     if paid_dates:

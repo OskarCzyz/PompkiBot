@@ -115,6 +115,14 @@ class ManualMoneyTest(SyncTest):
         self.assertEqual(len(fake.sent), 1)  # no thank-you for a removal
         self.assertIn("nie wpłaciła", asyncio.run(bot.apply_manual(fake, "zw", p, 999900)))
 
+    def test_credits_list(self):
+        import messages
+        self.assertEqual(messages.credits_list(db.get_credits()), "Nikt nie ma nadpłaty.")
+        payments.add_manual(1, 3500)  # 2 misses paid + 15 PLN credit
+        text = messages.credits_list(db.get_credits())
+        self.assertIn("Ania (@ania): 15 PLN", text)
+        self.assertIn("Łącznie: 15 PLN", text)
+
     def test_amount_keyboard_for_refund_only_offers_what_is_paid(self):
         payments.add_manual(1, 2000)
         kb = bot.manual_amount_keyboard("zw", 1)

@@ -159,6 +159,8 @@ your own account) and mark penalties paid by itself.
   unpaid days first, the rest becomes credit, the person gets the private
   thank-you). Removing uses up credit first, then puts the most recently
   paid days back on the unpaid list.
+- `/nadplaty` (admin) lists everyone holding a surplus (overpayment not yet
+  used), including people who were removed from the group.
 - Tests: `python -m unittest discover -s tests`.
 
 ## Adding participants
