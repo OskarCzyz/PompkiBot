@@ -44,7 +44,6 @@ def miss_report(day, missed_participants: list, regen_user_ids: set[int] = froze
         return f"🎉 Brawo! {date_str} — wszyscy zrobili pompki!"
     names = "\n".join(
         f"• {mention_html(p)}"
-        + (f" — w tytule: <code>POMPKI {p['pay_code']}</code>" if config.PAYMENTS_ENABLED and p["pay_code"] else "")
         + (REGEN_TAG if p["user_id"] in regen_user_ids else "")
         for p in missed_participants
     )
@@ -264,8 +263,8 @@ def kick_warning_group(participant, owed: int, kick_date) -> str:
     return (
         f"⚠️ {mention_html(participant)} — zostaje 1 dzień! Masz do zapłaty {owed} PLN. "
         f"Bez wpłaty {format_date_pl(kick_date)} rano zostaniesz usunięty/a z grupy.\n"
-        f"Twój tytuł przelewu: <code>POMPKI {participant['pay_code']}</code>. "
-        f"Dane do wpłaty: <code>/status</code> w prywatnej wiadomości do bota."
+        f"Dane do wpłaty i swój tytuł przelewu znajdziesz po wpisaniu <code>/status</code> "
+        f"w prywatnej wiadomości do bota."
     )
 
 

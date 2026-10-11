@@ -113,10 +113,8 @@ class CopyableTitleTest(SyncTest):
         config.PAY_TO = "BLIK +48 111 <222>"
         p = db.get_participant(1)
         want = f"<code>POMPKI {self.code}</code>"
-        self.assertIn(want, messages.miss_report(date(2026, 10, 1), [p]))
         self.assertIn(want, messages.status_reply(10, 0, ["2026-10-01"], pay_code=self.code))
         self.assertIn(want, messages.kick_warning_dm(p, 10, 7, date(2026, 10, 20)))
-        self.assertIn(want, messages.kick_warning_group(p, 10, date(2026, 10, 20)))
         self.assertIn("&lt;222&gt;", messages.status_reply(10, 0, [], pay_code=self.code))  # escaped
 
     def test_group_messages_have_no_clickable_commands(self):
@@ -132,6 +130,7 @@ class CopyableTitleTest(SyncTest):
             outside_code = re.sub(r"<code>.*?</code>", "", text)
             self.assertIsNone(re.search(r"(?<![\w/])/[a-z]{3,}", outside_code), text)
             self.assertIn("<code>/status</code>", text)
+            self.assertNotIn(self.code, text)  # pay codes stay out of the group
 
     def test_phone_number_monospace_in_dms_and_absent_from_group(self):
         import messages

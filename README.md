@@ -122,8 +122,8 @@ The bot can read incoming transfers on your bank account (read-only,
 PSD2 via [Enable Banking](https://enablebanking.com), restricted mode with
 your own account) and mark penalties paid by itself.
 
-- Every participant has a short pay code (shown in the miss report and in
-  `/status`). They put `POMPKI <code>` in the transfer title (BLIK to your
+- Every participant has a short pay code (shown only in private
+  messages — `/status` — never in the group). They put `POMPKI <code>` in the transfer title (BLIK to your
   phone number works too).
 - Every 8 hours the bot fetches new incoming transfers, matches them by code
   (or by sender name, which it learns), pays off the oldest unpaid days
