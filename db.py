@@ -209,7 +209,7 @@ def close_poll(poll_id: int):
 def get_unclosed_polls_up_to(cutoff_date: str):
     """Every still-open poll whose own close date is on or before cutoff_date,
     oldest first. Used to catch up on polls that were never closed because
-    the bot was down across one or more of their scheduled 08:00 closes."""
+    the bot was down across one or more of their scheduled closes."""
     with _conn() as conn:
         return conn.execute(
             "SELECT * FROM polls WHERE closed = 0 AND poll_date <= ? ORDER BY poll_date",

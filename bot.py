@@ -277,7 +277,7 @@ async def send_final_summary(bot, chat_id: int):
 
 
 async def job_daily_rollover(context: ContextTypes.DEFAULT_TYPE):
-    """Runs daily at 08:00: closes yesterday's poll (24h after it opened,
+    """Runs daily at POLL_HOUR: closes yesterday's poll (24h after it opened,
     right as today's opens, so only one poll is ever open at a time), then
     opens today's poll."""
     today = datetime.now(config.TIMEZONE).date()
@@ -318,12 +318,12 @@ async def job_backup_db(context: ContextTypes.DEFAULT_TYPE):
 async def catch_up_check(context: ContextTypes.DEFAULT_TYPE):
     """Runs once at startup.
 
-    1. Closes every poll whose 24h window (opens 08:00, closes 08:00 the
+    1. Closes every poll whose 24h window (opens at POLL_HOUR, closes then the
        next day) has already fully elapsed but that never got processed —
-       e.g. the bot was down across one or more scheduled 08:00 closes.
+       e.g. the bot was down across one or more scheduled closes.
        Without this sweep, any day caught in a multi-day outage would stay
        open forever and its misses would never be recorded.
-    2. If today's own poll is still missing once it's past 08:00, opens it
+    2. If today's own poll is still missing once it's past POLL_HOUR, opens it
        — but only once the challenge is already underway (a prior poll
        exists), so a fresh deployment never jumps ahead of a day being
        tracked by hand.
@@ -332,9 +332,10 @@ async def catch_up_check(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now(config.TIMEZONE).time()
     bot = context.bot
 
-    # A poll opened on `poll_date` is due to close at 08:00 on poll_date + 1.
+    # A poll opened on `poll_date` is due to close at POLL_HOUR on poll_date + 1.
     # So as of right now, anything with poll_date <= this cutoff is overdue.
-    cutoff = today - timedelta(days=1) if now >= time(8, 0) else today - timedelta(days=2)
+    poll_time = time(config.POLL_HOUR, 0)
+    cutoff = today - timedelta(days=1) if now >= poll_time else today - timedelta(days=2)
     overdue = db.get_unclosed_polls_up_to(cutoff.isoformat())
     for poll_row in overdue:
         close_date = date.fromisoformat(poll_row["poll_date"])
@@ -342,12 +343,12 @@ async def catch_up_check(context: ContextTypes.DEFAULT_TYPE):
         await close_poll_for_date(bot, close_date)
 
     if (
-        now >= time(8, 0)
+        now >= poll_time
         and today <= config.LAST_CHALLENGE_DAY
         and not db.get_poll_by_date(today.isoformat())
         and db.has_prior_poll(today.isoformat())
     ):
-        log.warning("Catch-up: today's poll is missing past 08:00 — opening it now.")
+        log.warning("Catch-up: today's poll is missing past the poll hour — opening it now.")
         await job_daily_rollover(context)
 
 
@@ -866,7 +867,7 @@ def challenge_finished() -> bool:
     if last:
         return bool(last["closed"])
     return datetime.now(config.TIMEZONE) >= datetime.combine(
-        config.LAST_CHALLENGE_DAY + timedelta(days=1), time(8, 0), tzinfo=config.TIMEZONE
+        config.LAST_CHALLENGE_DAY + timedelta(days=1), time(config.POLL_HOUR, 0), tzinfo=config.TIMEZONE
     )
 
 
@@ -880,7 +881,7 @@ async def cmd_personal_summary(update: Update, context: ContextTypes.DEFAULT_TYP
     if not challenge_finished() and not is_admin(user_id):
         await update.message.reply_text(
             f"Podsumowanie będzie dostępne po zakończeniu wyzwania — od "
-            f"{messages.format_date_pl(config.LAST_CHALLENGE_DAY + timedelta(days=1))}, 8:00. 💪"
+            f"{messages.format_date_pl(config.LAST_CHALLENGE_DAY + timedelta(days=1))}, {config.POLL_HOUR}:00. 💪"
         )
         return
     challenge = stats.collect()
@@ -1253,7 +1254,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(on_admin_callback))
     app.add_error_handler(error_handler)
 
-    app.job_queue.run_daily(job_daily_rollover, time=time(8, 0, tzinfo=config.TIMEZONE))
+    app.job_queue.run_daily(job_daily_rollover, time=time(config.POLL_HOUR, 0, tzinfo=config.TIMEZONE))
     app.job_queue.run_daily(job_backup_db, time=time(8, 10, tzinfo=config.TIMEZONE))
     app.job_queue.run_daily(job_reminder, time=time(21, 0, tzinfo=config.TIMEZONE))
     app.job_queue.run_once(catch_up_check, when=5)

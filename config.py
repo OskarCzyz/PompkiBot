@@ -13,6 +13,10 @@ ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.str
 TIMEZONE = ZoneInfo("Europe/Warsaw")
 LAST_CHALLENGE_DAY = date.fromisoformat(os.environ.get("LAST_CHALLENGE_DAY", "2026-10-09"))
 
+# Hour of day (Europe/Warsaw) the daily poll opens; it closes 24h later,
+# right as the next one opens.
+POLL_HOUR = 7
+
 PENALTY_PLN = 10
 PUSHUPS_PER_DAY = 50
 

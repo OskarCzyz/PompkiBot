@@ -63,7 +63,7 @@ def reminder(not_done_participants: list) -> str:
 def start_reply(first_name: str) -> str:
     return (
         f"Cześć, {first_name}! Zostałeś/-aś zapisany/a do wyzwania Pompek. 💪\n\n"
-        f"Codziennie o 8:00 w grupie pojawia się ankieta — głosuj, czy zrobiłeś/-aś "
+        f"Codziennie o {config.POLL_HOUR}:00 w grupie pojawia się ankieta — głosuj, czy zrobiłeś/-aś "
         f"pompki. Masz na to 24 godzin.\n\n"
         f"Napisz /status w dowolnej chwili, żeby sprawdzić swoje saldo."
     )

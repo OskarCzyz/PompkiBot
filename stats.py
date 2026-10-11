@@ -6,7 +6,7 @@ testable — collect() reads the database once, everything else just crunches
 the resulting ChallengeStats. Vote time is the proxy for "when did they do
 their pushups": a 'done' vote's timestamp is when they last switched it on.
 
-Times of day are handled as hours since the poll opened (08:00 on the poll
+Times of day are handled as hours since the poll opened (POLL_HOUR on the poll
 date, 0..24), so a vote at 01:30 the next night sorts *after* 23:00 rather
 than before 09:00 — that's the order people actually experienced the day in.
 """
@@ -30,13 +30,13 @@ import config
 import db
 from messages import WEEKDAYS_PL, mention_html
 
-POLL_OPEN = time(8, 0)
-REMINDER_OFFSET = 13.0  # 21:00 is 13h after the 08:00 open
-MIDNIGHT_OFFSET = 16.0
-# Votes later than 05:00 the next morning (21h after the 08:00 open) are
-# catch-ups for a forgotten check-in, not a habit: the day still counts as
-# done, but they stay out of every time-of-day stat.
-CATCH_UP_OFFSET = 21.0
+POLL_OPEN = time(config.POLL_HOUR, 0)
+REMINDER_OFFSET = float(21 - config.POLL_HOUR)  # the reminder goes out at 21:00
+MIDNIGHT_OFFSET = float(24 - config.POLL_HOUR)
+# Votes later than 05:00 the next morning are catch-ups for a forgotten
+# check-in, not a habit: the day still counts as done, but they stay out of
+# every time-of-day stat.
+CATCH_UP_OFFSET = float(24 + 5 - config.POLL_HOUR)
 MIN_TIMED = 5  # done votes needed before someone's time-of-day habits count
 
 WEEKDAYS_SHORT = ["pon", "wt", "śr", "czw", "pt", "sob", "nd"]
@@ -539,7 +539,7 @@ def chart_hour_histogram(stats: ChallengeStats) -> bytes:
         arrowprops=dict(arrowstyle="-", color=MUTED, linewidth=1),
     )
     ax.set_ylim(0, ymax * 1.18 + 0.5)
-    _style(ax, "O której robiliście pompki", "Godzina głosu „Tak, zrobione!” — od otwarcia ankiety (8:00) do zamknięcia")
+    _style(ax, "O której robiliście pompki", f"Godzina głosu „Tak, zrobione!” — od otwarcia ankiety ({config.POLL_HOUR}:00) do zamknięcia")
     return _png(fig)
 
 
