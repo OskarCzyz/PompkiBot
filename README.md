@@ -27,7 +27,7 @@ SQLite, no external services required.
 - **End-of-challenge stats & charts** — group-level stats plus a handful of
   individual oddities in the group, an album of group charts, and a
   personal `/podsumowanie` (stats + own chart) everyone can request
-  privately once the challenge is over.
+  privately at any time.
 - **Self-healing** — recovers automatically from downtime (multi-day
   outages included) without losing a day's data; daily automatic database
   backups.
@@ -72,8 +72,6 @@ SQLite, no external services required.
   `/podglad`.
 - After that, anyone can DM the bot `/podsumowanie` for their own stats
   (rank, streaks, typical time vs the group, money) and a personal chart.
-  Before the last poll closes it just says when it unlocks (admins can
-  use it any time).
 - Anyone can DM the bot `/start` to join the challenge (self-registration —
   see "Adding participants" below), and `/status` any time after to see
   what they owe, what they've paid, and which specific dates are still
@@ -302,8 +300,7 @@ also be targeted the same ways — plus a fourth, easiest one:
 
 - `/status`, sent as a **private message** to the bot (not in the group) —
   shows total owed, total paid, and the list of unpaid dates.
-- `/podsumowanie` (private, unlocks once the challenge ends) — personal
-  end-of-challenge stats and chart.
+- `/podsumowanie` (private) — personal stats and chart, available any time.
 
 ## Commands in the group
 

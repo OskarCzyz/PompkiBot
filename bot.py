@@ -1002,29 +1002,12 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
-def challenge_finished() -> bool:
-    """True once the last poll has been closed (and the final summary posted)."""
-    last = db.get_poll_by_date(config.LAST_CHALLENGE_DAY.isoformat())
-    if last:
-        return bool(last["closed"])
-    return datetime.now(config.TIMEZONE) >= datetime.combine(
-        config.LAST_CHALLENGE_DAY + timedelta(days=1), time(config.POLL_HOUR, 0), tzinfo=config.TIMEZONE
-    )
-
-
 async def cmd_personal_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Anyone's own end-of-challenge stats + chart, in a private chat. Only
-    unlocked once the challenge is over (admins can peek any time)."""
+    """Anyone's own stats + chart, in a private chat."""
     if update.effective_chat.type != "private":
         # Group chats: stay silent, so a stray command can't spam the group.
         return
     user_id = update.effective_user.id
-    if not challenge_finished() and not is_admin(user_id):
-        await update.message.reply_text(
-            f"Podsumowanie będzie dostępne po zakończeniu wyzwania — od "
-            f"{messages.format_date_pl(config.LAST_CHALLENGE_DAY + timedelta(days=1))}, {config.POLL_HOUR}:00. 💪"
-        )
-        return
     challenge = stats.collect()
     person = next((p for p in challenge.people if p.user_id == user_id), None)
     if not person:
@@ -1343,7 +1326,7 @@ PARTICIPANT_COMMANDS = [
     BotCommand("status", "Sprawdź swoje saldo"),
     BotCommand("ranking", "Aktualne zadłużenie wszystkich"),
     BotCommand("uczestnicy", "Lista uczestników wyzwania"),
-    BotCommand("podsumowanie", "Twoje statystyki (po zakończeniu wyzwania)"),
+    BotCommand("podsumowanie", "Twoje statystyki i wykres"),
 ]
 
 ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
