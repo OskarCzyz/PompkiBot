@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS misses (
     PRIMARY KEY (user_id, miss_date)
 );
 
+-- Admin-granted leave (injury, illness…): poll dates start_date..end_date
+-- inclusive, during which the person isn't asked for pushups and no miss is
+-- recorded. They stay on the roster and keep any debt they already had.
+CREATE TABLE IF NOT EXISTS vacations (
+    user_id     INTEGER NOT NULL,
+    start_date  TEXT NOT NULL,
+    end_date    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS regen_days (
     user_id     INTEGER NOT NULL,
     regen_date  TEXT NOT NULL,
@@ -283,6 +292,61 @@ def record_miss(user_id: int, miss_date: str):
             "INSERT OR IGNORE INTO misses (user_id, miss_date, paid) VALUES (?, ?, 0)",
             (user_id, miss_date),
         )
+
+
+# ---------- vacations ----------
+
+def add_vacation(user_id: int, start_date: str, end_date: str):
+    with _conn() as conn:
+        conn.execute(
+            "INSERT INTO vacations (user_id, start_date, end_date) VALUES (?, ?, ?)",
+            (user_id, start_date, end_date),
+        )
+
+
+def end_vacation(user_id: int, today: str, yesterday: str) -> bool:
+    """Ends leave as of today: today's poll counts again. Returns True if
+    there was any leave running or planned to cut short."""
+    with _conn() as conn:
+        deleted = conn.execute(
+            "DELETE FROM vacations WHERE user_id = ? AND start_date >= ?", (user_id, today)
+        ).rowcount
+        trimmed = conn.execute(
+            "UPDATE vacations SET end_date = ? WHERE user_id = ? AND start_date < ? AND end_date >= ?",
+            (yesterday, user_id, today, today),
+        ).rowcount
+        return bool(deleted or trimmed)
+
+
+def get_vacation_end(user_id: int, day: str) -> str | None:
+    """Last day of the leave covering `day`, or None if not on leave."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT MAX(end_date) AS e FROM vacations WHERE user_id = ? AND start_date <= ? AND end_date >= ?",
+            (user_id, day, day),
+        ).fetchone()
+        return row["e"]
+
+
+def get_last_vacation_end(user_id: int) -> str | None:
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT MAX(end_date) AS e FROM vacations WHERE user_id = ?", (user_id,)
+        ).fetchone()["e"]
+
+
+def get_vacation_user_ids(day: str) -> set[int]:
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT user_id FROM vacations WHERE start_date <= ? AND end_date >= ?",
+            (day, day),
+        ).fetchall()
+        return {r["user_id"] for r in rows}
+
+
+def get_all_vacations():
+    with _conn() as conn:
+        return conn.execute("SELECT user_id, start_date, end_date FROM vacations").fetchall()
 
 
 def set_regen(user_id: int, regen_date: str):

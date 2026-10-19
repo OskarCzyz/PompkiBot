@@ -236,11 +236,17 @@ async def close_poll_for_date(bot, close_date: date):
 
     votes = db.get_votes_for_poll(poll_row["id"])
     participants = db.get_active_participants()
+    on_leave_ids = db.get_vacation_user_ids(close_date.isoformat())
     missed = []
+    on_leave = []
     for p in participants:
-        if votes.get(p["user_id"]) != config.OPTION_DONE:
-            db.record_miss(p["user_id"], close_date.isoformat())
-            missed.append(p)
+        if votes.get(p["user_id"]) == config.OPTION_DONE:
+            continue
+        if p["user_id"] in on_leave_ids:
+            on_leave.append(p)
+            continue
+        db.record_miss(p["user_id"], close_date.isoformat())
+        missed.append(p)
     db.close_poll(poll_row["id"])
 
     regen_ids = db.get_regen_user_ids(close_date.isoformat()) | {
@@ -248,7 +254,7 @@ async def close_poll_for_date(bot, close_date: date):
     }
     await bot.send_message(
         chat_id=config.GROUP_CHAT_ID,
-        text=messages.miss_report(close_date, missed, regen_ids),
+        text=messages.miss_report(close_date, missed, regen_ids, on_leave),
         parse_mode=ParseMode.HTML,
     )
 
@@ -365,7 +371,11 @@ async def job_reminder(context: ContextTypes.DEFAULT_TYPE):
 
     votes = db.get_votes_for_poll(poll_row["id"])
     participants = db.get_active_participants()
-    not_done = [p for p in participants if votes.get(p["user_id"]) != config.OPTION_DONE]
+    on_leave_ids = db.get_vacation_user_ids(today.isoformat())
+    not_done = [
+        p for p in participants
+        if votes.get(p["user_id"]) != config.OPTION_DONE and p["user_id"] not in on_leave_ids
+    ]
     if not not_done:
         return
 
@@ -723,6 +733,62 @@ async def cmd_manual_money(update: Update, context: ContextTypes.DEFAULT_TYPE, a
     await update.message.reply_text(await apply_manual(context.bot, action, target, grosze))
 
 
+VACATION_DAYS = (7, 14, 21, 28)
+MAX_VACATION_DAYS = 365
+
+
+def vacation_keyboard(user_id: int, on_leave: bool) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(f"{d} dni", callback_data=f"ur:{user_id}:{d}") for d in VACATION_DAYS
+    ]
+    rows = [buttons[:2], buttons[2:]]
+    if on_leave:
+        rows.append([InlineKeyboardButton("Zakończ urlop", callback_data=f"ur:{user_id}:end")])
+    return InlineKeyboardMarkup(rows)
+
+
+def apply_vacation(participant, arg: str) -> str:
+    """Starts leave from today for `arg` days or until the given date
+    (inclusive), or ends it ('end'). Returns the text for the admin."""
+    user_id, name = participant["user_id"], participant["first_name"]
+    today = datetime.now(config.TIMEZONE).date()
+    if arg.lower() in ("end", "koniec", "stop"):
+        ended = db.end_vacation(user_id, today.isoformat(), (today - timedelta(days=1)).isoformat())
+        return messages.vacation_ended(name) if ended else f"{name} nie ma urlopu."
+    if arg.isdigit():
+        days = int(arg)
+        end = today + timedelta(days=days - 1)
+    else:
+        end = parse_date_arg(arg)
+        days = (end - today).days + 1 if end else 0
+    if not 1 <= days <= MAX_VACATION_DAYS:
+        return "Podaj liczbę dni (np. 21) albo datę końca urlopu RRRR-MM-DD (włącznie), albo „koniec”."
+    db.add_vacation(user_id, today.isoformat(), end.isoformat())
+    return messages.vacation_set(name, today, end)
+
+
+async def cmd_vacation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: take someone out of the challenge for a while without removing
+    them from the group — no polls counted, no misses, no reminders."""
+    if not is_admin(update.effective_user.id):
+        return
+    target, args = resolve_target(update, context)
+    if not target:
+        await send_participant_picker(update, "ur", "Kogo wysłać na urlop?")
+        return
+    if not args:
+        today = datetime.now(config.TIMEZONE).date().isoformat()
+        end = db.get_vacation_end(target["user_id"], today)
+        status = f" (obecny urlop do {end})" if end else ""
+        await update.message.reply_text(
+            f"Na ile dni urlop dla {target['first_name']}{status}? "
+            "(inaczej: /urlop @osoba 21, /urlop @osoba 2026-11-09, /urlop @osoba koniec)",
+            reply_markup=vacation_keyboard(target["user_id"], bool(end)),
+        )
+        return
+    await update.message.reply_text(apply_vacation(target, args[0]))
+
+
 async def cmd_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin: who has paid more than they owe."""
     if not is_admin(update.effective_user.id):
@@ -881,6 +947,17 @@ async def on_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ok = db.unmark_paid(user_id, rest[0])
         text = f"Cofnięto płatność: {name} — {rest[0]} ✅" if ok else "Nie znaleziono zapłaconego długu na tę datę."
         await query.edit_message_text(text)
+        return
+
+    if action == "ur":
+        if not rest:
+            today = datetime.now(config.TIMEZONE).date().isoformat()
+            on_leave = bool(db.get_vacation_end(user_id, today))
+            await query.edit_message_text(
+                f"Na ile dni urlop dla {name}?", reply_markup=vacation_keyboard(user_id, on_leave)
+            )
+            return
+        await query.edit_message_text(apply_vacation(participant, rest[0]))
         return
 
     if action == "md":
@@ -1271,7 +1348,7 @@ async def send_kick_warning(bot, p, s):
             log.info("Could not DM %s the kick warning, using the group instead", p["user_id"])
     await bot.send_message(
         chat_id=config.GROUP_CHAT_ID,
-        text=messages.kick_warning_group(p, s.owed, kick_date),
+        text=messages.kick_warning_group(p, s.owed, s.days_left, kick_date),
         parse_mode=ParseMode.HTML,
     )
 
@@ -1339,6 +1416,7 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("podglad", "Podgląd podsumowania końcowego dla grupy"),
     BotCommand("napisz", "Napisz na grupie jako bot"),
     BotCommand("regeneracja", "Oznacz nieobecność jako #regeneracja"),
+    BotCommand("urlop", "Urlop od wyzwania (bez kar, bez usuwania z grupy)"),
     BotCommand("odswiez", "Pobierz wpłaty z banku teraz"),
     BotCommand("nadplaty", "Kto ma nadpłatę"),
     BotCommand("wplata", "Dodaj wpłatę ręcznie"),
@@ -1383,6 +1461,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("podglad", cmd_group_summary_preview))
     app.add_handler(CommandHandler("napisz", cmd_say_in_group))
     app.add_handler(CommandHandler("regeneracja", cmd_regeneracja))
+    app.add_handler(CommandHandler("urlop", cmd_vacation))
     app.add_handler(CommandHandler("odswiez", cmd_refresh_payments))
     app.add_handler(CommandHandler("nadplaty", cmd_credits))
     app.add_handler(CommandHandler("wplata", cmd_add_payment))

@@ -218,7 +218,7 @@ class CopyableTitleTest(SyncTest):
         p = db.get_participant(1)
         for text in (
             messages.miss_report(date(2026, 10, 1), [p]),
-            messages.kick_warning_group(p, 10, date(2026, 10, 20)),
+            messages.kick_warning_group(p, 10, 1, date(2026, 10, 20)),
         ):
             outside_code = re.sub(r"<code>.*?</code>", "", text)
             self.assertIsNone(re.search(r"(?<![\w/])/[a-z]{3,}", outside_code), text)
@@ -235,7 +235,7 @@ class CopyableTitleTest(SyncTest):
         self.assertIn(number, messages.kick_warning_dm(p, 10, 7, date(2026, 10, 20)))
         for group_text in (
             messages.miss_report(date(2026, 10, 1), [p]),
-            messages.kick_warning_group(p, 10, date(2026, 10, 20)),
+            messages.kick_warning_group(p, 10, 1, date(2026, 10, 20)),
         ):
             self.assertNotIn("730", group_text)
             self.assertNotIn("292", group_text)

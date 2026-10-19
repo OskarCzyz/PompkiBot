@@ -154,13 +154,15 @@ def hours_since_open(poll_date: str, voted_at: str) -> float:
     return min(max(raw_hours_since_open(poll_date, voted_at), 0.0), 23.999)
 
 
-def build(poll_dates, participants, votes, misses) -> ChallengeStats:
+def build(poll_dates, participants, votes, misses, vacations=()) -> ChallengeStats:
     """poll_dates: closed poll dates, ascending. votes: rows with poll_date,
     user_id, option_id, voted_at. misses: rows with user_id, miss_date.
 
     A person's challenge starts on the first date they have any trace on
     (a vote or a miss) — someone who joined mid-challenge isn't counted as
-    having 'done' the days before they were even registered."""
+    having 'done' the days before they were even registered. Days on leave
+    (vacations: rows with user_id, start_date, end_date) don't count as days
+    in the challenge for that person at all."""
     poll_set = set(poll_dates)
     missed_by = {}
     first_seen = {}
@@ -174,6 +176,12 @@ def build(poll_dates, participants, votes, misses) -> ChallengeStats:
             continue
         first_seen[v["user_id"]] = min(first_seen.get(v["user_id"], v["poll_date"]), v["poll_date"])
 
+    leave_by = {}
+    for v in vacations:
+        leave_by.setdefault(v["user_id"], set()).update(
+            d for d in poll_dates if v["start_date"] <= d <= v["end_date"]
+        )
+
     people = []
     by_id = {}
     for p in participants:
@@ -182,7 +190,7 @@ def build(poll_dates, participants, votes, misses) -> ChallengeStats:
             continue
         person = Person(
             participant=p,
-            days=[d for d in poll_dates if d >= start],
+            days=[d for d in poll_dates if d >= start and d not in leave_by.get(p["user_id"], ())],
             missed=missed_by.get(p["user_id"], set()),
         )
         people.append(person)
@@ -208,6 +216,7 @@ def collect() -> ChallengeStats:
         db.get_active_participants(),
         db.get_all_votes(),
         db.get_all_misses(),
+        db.get_all_vacations(),
     )
 
 

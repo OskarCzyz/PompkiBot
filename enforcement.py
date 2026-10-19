@@ -31,6 +31,10 @@ def standing(user_id: int, today: date, enforced_since: date) -> Standing | None
     last_paid = db.get_last_payment_date(user_id)
     if last_paid:
         start = max(start, date.fromisoformat(last_paid))
+    # Leave pauses the clock: it restarts the day after the leave ends.
+    leave_end = db.get_last_vacation_end(user_id)
+    if leave_end:
+        start = max(start, date.fromisoformat(leave_end) + timedelta(days=1))
     days_left = (start + timedelta(days=config.KICK_AFTER_DAYS) - today).days
     return Standing(user_id, owed, start, days_left)
 

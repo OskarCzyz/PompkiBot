@@ -38,10 +38,20 @@ def mention_html(participant) -> str:
     return f'<a href="tg://user?id={participant["user_id"]}">{escape(participant["first_name"])}</a>'
 
 
-def miss_report(day, missed_participants: list, regen_user_ids: set[int] = frozenset()) -> str:
+def vacation_line(on_leave: list) -> str:
+    return "🏖️ Na urlopie (bez kary): " + ", ".join(mention_html(p) for p in on_leave)
+
+
+def miss_report(
+    day,
+    missed_participants: list,
+    regen_user_ids: set[int] = frozenset(),
+    on_leave: list = (),
+) -> str:
     date_str = format_date_pl(day)
     if not missed_participants:
-        return f"🎉 Brawo! {date_str} — wszyscy zrobili pompki!"
+        text = f"🎉 Brawo! {date_str} — wszyscy zrobili pompki!"
+        return text + (f"\n\n{vacation_line(on_leave)}" if on_leave else "")
     names = "\n".join(
         f"• {mention_html(p)}"
         + (REGEN_TAG if p["user_id"] in regen_user_ids else "")
@@ -56,7 +66,20 @@ def miss_report(day, missed_participants: list, regen_user_ids: set[int] = froze
             "\n\n💸 Dane do wpłaty i swój tytuł znajdziesz po wpisaniu <code>/status</code> w prywatnej "
             "wiadomości do bota — wpłatę zaksięguje on sam."
         )
+    if on_leave:
+        text += f"\n\n{vacation_line(on_leave)}"
     return text
+
+
+def vacation_set(name: str, start, end) -> str:
+    return (
+        f"🏖️ Urlop: {name} — od {format_date_pl(start)} do {format_date_pl(end)} włącznie. "
+        f"W tym czasie bez ankiety, kar i przypomnień. Dotychczasowy dług zostaje."
+    )
+
+
+def vacation_ended(name: str) -> str:
+    return f"✅ {name} wraca do wyzwania — od dziś liczą się pompki."
 
 
 def regen_note(day, participant) -> str:
@@ -259,9 +282,9 @@ def kick_warning_dm(participant, owed: int, days_left: int, kick_date) -> str:
     )
 
 
-def kick_warning_group(participant, owed: int, kick_date) -> str:
+def kick_warning_group(participant, owed: int, days_left: int, kick_date) -> str:
     return (
-        f"⚠️ {mention_html(participant)} — zostaje 1 dzień! Masz do zapłaty {owed} PLN. "
+        f"⚠️ {mention_html(participant)} — zostaje {days_left} {'dzień' if days_left == 1 else 'dni'}! Masz do zapłaty {owed} PLN. "
         f"Bez wpłaty {format_date_pl(kick_date)} rano zostaniesz usunięty/a z grupy.\n"
         f"Dane do wpłaty i swój tytuł przelewu znajdziesz po wpisaniu <code>/status</code> "
         f"w prywatnej wiadomości do bota."

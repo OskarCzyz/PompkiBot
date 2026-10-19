@@ -293,6 +293,14 @@ also be targeted the same ways — plus a fourth, easiest one:
   report then marks them as "nie zapomniał, to świadomy wybór". If that
   day's report already went out, the group gets that note right away.
   Payment is unchanged.
+- `/urlop` — leave from the challenge (injury, illness) without leaving the
+  group. Without a name, a picker; then buttons for 7/14/21/28 days, or
+  type `/urlop @user 21` (days, counting today), `/urlop @user 2026-11-09`
+  (until that date, inclusive) or `/urlop @user koniec` (back from today).
+  During leave: no misses or penalties, no reminders, the day isn't counted
+  in their stats, and the group's daily report lists them as "na urlopie".
+  Debt from before the leave stays, but the kick countdown restarts the day
+  after the leave ends. Past days aren't touched (use `/markdone`).
 - `/napisz <treść>` (private chat only) — post `<treść>` to the group as
   the bot. Plain text, sent exactly as typed (multi-line works).
 
