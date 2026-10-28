@@ -64,6 +64,7 @@ class Person:
     days: list[str] = field(default_factory=list)          # closed poll dates they were in
     missed: set[str] = field(default_factory=set)
     done_offsets: dict[str, float] = field(default_factory=dict)  # date -> hours since open, habit votes only
+    challenge_counts: dict[str, int] = field(default_factory=dict)  # challenge date -> logged pushups
 
     @property
     def user_id(self) -> int:
@@ -76,6 +77,13 @@ class Person:
     @property
     def done_days(self) -> list[str]:
         return [d for d in self.days if d not in self.missed]
+
+    @property
+    def pushups(self) -> int:
+        """Done days count PUSHUPS_PER_DAY, challenge days their real count
+        (never less, so an admin /markdone still counts a full day)."""
+        goal = config.PUSHUPS_PER_DAY
+        return sum(max(self.challenge_counts.get(d, 0), goal) for d in self.done_days)
 
     @property
     def completion(self) -> float:
@@ -138,6 +146,7 @@ class Person:
 class ChallengeStats:
     poll_dates: list[str]
     people: list[Person]
+    challenges: list = field(default_factory=list)  # closed challenge_days rows
 
     @property
     def all_offsets(self) -> list[tuple[Person, str, float]]:
@@ -154,7 +163,17 @@ def hours_since_open(poll_date: str, voted_at: str) -> float:
     return min(max(raw_hours_since_open(poll_date, voted_at), 0.0), 23.999)
 
 
-def build(poll_dates, participants, votes, misses, vacations=()) -> ChallengeStats:
+def challenge_winners(counts: dict[int, int]) -> tuple[int, list[int]]:
+    """(best count, user ids with it) - nobody wins with 0."""
+    best = max(counts.values(), default=0)
+    if best <= 0:
+        return 0, []
+    return best, [uid for uid, c in counts.items() if c == best]
+
+
+def build(
+    poll_dates, participants, votes, misses, vacations=(), challenges=(), challenge_counts=()
+) -> ChallengeStats:
     """poll_dates: closed poll dates, ascending. votes: rows with poll_date,
     user_id, option_id, voted_at. misses: rows with user_id, miss_date.
 
@@ -207,7 +226,14 @@ def build(poll_dates, participants, votes, misses, vacations=()) -> ChallengeSta
             if raw_hours_since_open(v["poll_date"], v["voted_at"]) < CATCH_UP_OFFSET:
                 person.done_offsets[v["poll_date"]] = hours_since_open(v["poll_date"], v["voted_at"])
 
-    return ChallengeStats(poll_dates=list(poll_dates), people=people)
+    challenges = [c for c in challenges if c["challenge_date"] in poll_set]
+    challenge_set = {c["challenge_date"] for c in challenges}
+    for c in challenge_counts:
+        person = by_id.get(c["user_id"])
+        if person and c["challenge_date"] in challenge_set:
+            person.challenge_counts[c["challenge_date"]] = c["count"]
+
+    return ChallengeStats(poll_dates=list(poll_dates), people=people, challenges=challenges)
 
 
 def collect() -> ChallengeStats:
@@ -217,6 +243,8 @@ def collect() -> ChallengeStats:
         db.get_all_votes(),
         db.get_all_misses(),
         db.get_all_vacations(),
+        db.get_closed_challenges(),
+        db.get_all_challenge_counts(),
     )
 
 
@@ -279,6 +307,19 @@ def weekday_rates(stats: ChallengeStats) -> dict[int, float]:
     return {wd: done[wd] / total[wd] for wd in total}
 
 
+def challenges_text(stats: ChallengeStats) -> list[str]:
+    """One line per challenge day: winner(s), their score and the group total."""
+    out = []
+    for c in stats.challenges:
+        d = c["challenge_date"]
+        counts = {p.user_id: p.challenge_counts[d] for p in stats.people if d in p.challenge_counts}
+        best, winner_ids = challenge_winners(counts)
+        winners = ", ".join(mention_html(p.participant) for p in stats.people if p.user_id in winner_ids)
+        line = f"{format_day(d)}: " + (f"{winners} - {best}" if winners else "brak zwycięzcy")
+        out.append(line + f" (razem {fmt_int(sum(counts.values()))} pompek)")
+    return out
+
+
 def stats_text(stats: ChallengeStats) -> str:
     """The group's end-of-challenge stats message: aggregate numbers for the
     whole group, then a handful of individual oddities ("Ciekawostki")
@@ -292,7 +333,7 @@ def stats_text(stats: ChallengeStats) -> str:
     total_days = sum(len(p.days) for p in people)
     completions = [p.completion for p in people]
     lines.append(
-        f"💪 Łącznie zrobiliście <b>{fmt_int(total_done * config.PUSHUPS_PER_DAY)}</b> pompek "
+        f"💪 Łącznie zrobiliście <b>{fmt_int(sum(p.pushups for p in people))}</b> pompek "
         f"— {len(people)} osób, {len(stats.poll_dates)} dni."
     )
     lines.append(
@@ -335,6 +376,11 @@ def stats_text(stats: ChallengeStats) -> str:
             f"({after_reminder / len(offsets):.0%})"
         )
         lines.append(f"🌚 Po północy: {after_midnight} głosów ({after_midnight / len(offsets):.0%})")
+
+    challenge_lines = challenges_text(stats)
+    if challenge_lines:
+        lines.append("\n🏆 <b>Challenge'e</b>")
+        lines.extend(challenge_lines)
 
     oddities = anomalies(stats)
     if oddities:
@@ -457,11 +503,14 @@ def personal_text(stats: ChallengeStats, person: Person, owed: int, paid: int) -
     tied = sum(1 for p in people if p.completion == person.completion) > 1
     lines = [
         f"📬 <b>Twoje podsumowanie wyzwania, {escape(person.name)}</b>\n",
-        f"💪 Zrobione pompki: <b>{fmt_int(len(person.done_days) * config.PUSHUPS_PER_DAY)}</b>",
+        f"💪 Zrobione pompki: <b>{fmt_int(person.pushups)}</b>",
         f"✅ Zaliczone dni: {len(person.done_days)}/{len(person.days)} ({person.completion:.0%})",
         f"🏆 Miejsce: {rank}. z {len(people)}" + (" (ex aequo)" if tied else ""),
         f"🔥 Najdłuższa passa: {person.longest_streak} dni z rzędu",
     ]
+    if any(person.challenge_counts.values()):
+        best_day = max(person.challenge_counts, key=person.challenge_counts.get)
+        lines.append(f"🏁 Rekord w challenge'u: {person.challenge_counts[best_day]} ({short_date(best_day)})")
     run, start, end = person.longest_miss_run
     if run >= 2:
         lines.append(f"🕳️ Najdłuższa przerwa: {run} dni ({short_date(start)}–{short_date(end)})")

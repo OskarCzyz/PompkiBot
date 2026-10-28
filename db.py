@@ -79,6 +79,25 @@ CREATE TABLE IF NOT EXISTS bank_state (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+
+-- Challenge days: on these dates the daily poll is replaced by a message
+-- with +1/+5/+10 buttons, and whoever logs the most pushups wins prize_pln.
+CREATE TABLE IF NOT EXISTS challenge_days (
+    challenge_date        TEXT PRIMARY KEY,
+    prize_pln             INTEGER NOT NULL,
+    announce_message_id   INTEGER,
+    cancelled             INTEGER NOT NULL DEFAULT 0
+);
+
+-- reached_at: when count first reached PUSHUPS_PER_DAY (cleared if it drops
+-- back below) - becomes the 'done' vote's time at close.
+CREATE TABLE IF NOT EXISTS challenge_counts (
+    challenge_date  TEXT NOT NULL,
+    user_id         INTEGER NOT NULL,
+    count           INTEGER NOT NULL DEFAULT 0,
+    reached_at      TEXT,
+    PRIMARY KEY (challenge_date, user_id)
+);
 """
 
 PAY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I
@@ -602,3 +621,99 @@ def get_last_payment_date(user_id: int) -> str | None:
             (user_id, user_id),
         ).fetchone()
         return row["d"] if row else None
+
+
+# ---------- challenge days ----------
+
+def schedule_challenge(challenge_date: str, prize_pln: int, announce_message_id: int | None):
+    """Schedules (or re-schedules a cancelled) challenge day."""
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO challenge_days (challenge_date, prize_pln, announce_message_id)
+               VALUES (?, ?, ?)
+               ON CONFLICT(challenge_date) DO UPDATE SET
+                   prize_pln=excluded.prize_pln,
+                   announce_message_id=excluded.announce_message_id,
+                   cancelled=0""",
+            (challenge_date, prize_pln, announce_message_id),
+        )
+
+
+def get_challenge_day(challenge_date: str):
+    """The challenge scheduled for this date, or None (cancelled ones excluded)."""
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM challenge_days WHERE challenge_date = ? AND cancelled = 0",
+            (challenge_date,),
+        ).fetchone()
+
+
+def get_unstarted_challenge():
+    """The earliest scheduled challenge whose day hasn't opened yet."""
+    with _conn() as conn:
+        return conn.execute(
+            """SELECT c.* FROM challenge_days c
+               WHERE c.cancelled = 0
+                 AND NOT EXISTS (SELECT 1 FROM polls p WHERE p.poll_date = c.challenge_date)
+               ORDER BY c.challenge_date LIMIT 1"""
+        ).fetchone()
+
+
+def cancel_challenge(challenge_date: str):
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE challenge_days SET cancelled = 1 WHERE challenge_date = ?", (challenge_date,)
+        )
+
+
+def add_challenge_count(challenge_date: str, user_id: int, delta: int, now: str) -> int:
+    """Adds delta (never going below 0) and keeps reached_at in step with
+    crossing PUSHUPS_PER_DAY. Returns the new count."""
+    goal = config.PUSHUPS_PER_DAY
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO challenge_counts (challenge_date, user_id, count, reached_at)
+               VALUES (?1, ?2, MAX(0, ?3), CASE WHEN ?3 >= ?4 THEN ?5 END)
+               ON CONFLICT(challenge_date, user_id) DO UPDATE SET
+                   reached_at = CASE
+                       WHEN MAX(0, count + ?3) < ?4 THEN NULL
+                       WHEN reached_at IS NULL THEN ?5
+                       ELSE reached_at END,
+                   count = MAX(0, count + ?3)""",
+            (challenge_date, user_id, delta, goal, now),
+        )
+        return conn.execute(
+            "SELECT count FROM challenge_counts WHERE challenge_date = ? AND user_id = ?",
+            (challenge_date, user_id),
+        ).fetchone()["count"]
+
+
+def get_challenge_counts(challenge_date: str) -> dict:
+    """user_id -> row (count, reached_at) for one challenge day."""
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM challenge_counts WHERE challenge_date = ?", (challenge_date,)
+        ).fetchall()
+        return {r["user_id"]: r for r in rows}
+
+
+def get_closed_challenges():
+    """Challenge days that have already closed, with their prize."""
+    with _conn() as conn:
+        return conn.execute(
+            """SELECT c.* FROM challenge_days c
+               JOIN polls p ON p.poll_date = c.challenge_date
+               WHERE c.cancelled = 0 AND p.closed = 1
+               ORDER BY c.challenge_date"""
+        ).fetchall()
+
+
+def get_all_challenge_counts():
+    """Counts from every challenge day that actually ran."""
+    with _conn() as conn:
+        return conn.execute(
+            """SELECT cc.challenge_date, cc.user_id, cc.count FROM challenge_counts cc
+               JOIN challenge_days c ON c.challenge_date = cc.challenge_date
+               JOIN polls p ON p.poll_date = cc.challenge_date
+               WHERE c.cancelled = 0"""
+        ).fetchall()

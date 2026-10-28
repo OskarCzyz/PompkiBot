@@ -348,3 +348,70 @@ def manual_removed(name: str, amount: int, unpaid_dates: list[str], credit: int,
         text += f"\nNadpłata: {pln(credit)}."
     text += f"\nDo zapłaty: {still_owed} PLN."
     return text
+
+
+# ---------- challenge days ----------
+
+CHALLENGE_DELTAS = [1, 5, 10, -1]
+
+
+def challenge_rules(prize_pln: int) -> str:
+    goal = config.PUSHUPS_PER_DAY
+    return (
+        f"• Klikasz +1 / +5 / +10 po każdej serii (−1 cofa pomyłkę).\n"
+        f"• {goal} pompek = dzień zaliczony, mniej = zwykła kara {config.PENALTY_PLN} PLN.\n"
+        f"• Kto zrobi najwięcej, wygrywa <b>{prize_pln} zł</b> z puli (remis = podział).\n"
+        f"• Nie chcesz się ścigać? Po prostu wyklikaj {goal}.\n"
+        f"• Liczą się pompki zrobione do 23:59, a klikać można do {config.POLL_HOUR}:00 rano."
+    )
+
+
+def challenge_announcement(d, prize_pln: int) -> str:
+    return (
+        f"🏁 <b>CHALLENGE: {format_date_pl(d)}</b>\n\n"
+        f"Tego dnia zamiast zwykłej ankiety będzie licznik pompek.\n\n"
+        + challenge_rules(prize_pln)
+    )
+
+
+def challenge_cancelled(d) -> str:
+    return f"❌ Challenge {format_date_pl(d)} odwołany - tego dnia zwykła ankieta."
+
+
+def challenge_ranking(rows) -> str:
+    """rows: [(participant, count)], sorted by count desc."""
+    if not rows:
+        return "Na razie nikt nic nie wpisał."
+    medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+    lines = []
+    for i, (p, count) in enumerate(rows):
+        done = " ✅" if count >= config.PUSHUPS_PER_DAY else ""
+        lines.append(f"{medals.get(i, f'{i + 1}.')} {mention_html(p)}: <b>{count}</b>{done}")
+    return "\n".join(lines)
+
+
+def challenge_message(d, prize_pln: int, rows, closed: bool = False) -> str:
+    head = f"🏁 <b>CHALLENGE - {format_date_pl(d)}</b>"
+    if closed:
+        return f"{head}\n\nZakończony. Wyniki końcowe:\n\n{challenge_ranking(rows)}"
+    return f"{head}\n\n{challenge_rules(prize_pln)}\n\n<b>Ranking:</b>\n{challenge_ranking(rows)}"
+
+
+def challenge_result(d, prize_pln: int, winners: list, best: int) -> str:
+    if not winners:
+        return f"🏁 Challenge {format_date_pl(d)}: nikt nie wziął udziału."
+    names = ", ".join(mention_html(p) for p in winners)
+    if len(winners) == 1:
+        return f"🏆 Challenge {format_date_pl(d)} wygrywa {names} - {best} pompek! Nagroda: {prize_pln} zł z puli."
+    return (
+        f"🏆 Challenge {format_date_pl(d)}: remis! {names} - po {best} pompek. "
+        f"Nagroda {prize_pln} zł dzielona po równo."
+    )
+
+
+def challenge_reminder(not_done_participants: list, rows) -> str:
+    mentions = ", ".join(mention_html(p) for p in not_done_participants)
+    return (
+        f"Przypomnienie! {mentions} - macie jeszcze mniej niż {config.PUSHUPS_PER_DAY} pompek "
+        f"w dzisiejszym challenge'u! 💪\n\n<b>Ranking:</b>\n{challenge_ranking(rows)}"
+    )

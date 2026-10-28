@@ -20,6 +20,10 @@ POLL_HOUR = 7
 PENALTY_PLN = 10
 PUSHUPS_PER_DAY = 50
 
+# Default prize for a challenge day's winner (/challenge can override it).
+# Paid out by hand from the pot; the bot only announces it.
+CHALLENGE_PRIZE_PLN = int(os.environ.get("CHALLENGE_PRIZE_PLN", "50"))
+
 # Who gets their own "how did they do it" chart in the final stats — an
 # @username, a numeric user id, or a first name (case-insensitive).
 SPOTLIGHT_USER = os.environ.get("SPOTLIGHT_USER", "").strip()
