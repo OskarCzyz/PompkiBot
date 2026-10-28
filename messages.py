@@ -358,7 +358,7 @@ CHALLENGE_DELTAS = [1, 5, 10, -1]
 def challenge_rules(prize_pln: int) -> str:
     goal = config.PUSHUPS_PER_DAY
     return (
-        f"• Klikasz +1 / +5 / +10 po każdej serii (−1 cofa pomyłkę).\n"
+        f"• Klikasz +1 / +5 / +10 po każdej serii (-1 cofa pomyłkę).\n"
         f"• {goal} pompek = dzień zaliczony, mniej = zwykła kara {config.PENALTY_PLN} PLN.\n"
         f"• Kto zrobi najwięcej, wygrywa <b>{prize_pln} zł</b> z puli (remis = podział).\n"
         f"• Nie chcesz się ścigać? Po prostu wyklikaj {goal}.\n"
@@ -411,7 +411,8 @@ def challenge_result(d, prize_pln: int, winners: list, best: int) -> str:
 
 def challenge_reminder(not_done_participants: list, rows) -> str:
     mentions = ", ".join(mention_html(p) for p in not_done_participants)
+    you_have = "masz" if len(not_done_participants) == 1 else "macie"
     return (
-        f"Przypomnienie! {mentions} - macie jeszcze mniej niż {config.PUSHUPS_PER_DAY} pompek "
+        f"Przypomnienie! {mentions} - {you_have} jeszcze mniej niż {config.PUSHUPS_PER_DAY} pompek "
         f"w dzisiejszym challenge'u! 💪\n\n<b>Ranking:</b>\n{challenge_ranking(rows)}"
     )
