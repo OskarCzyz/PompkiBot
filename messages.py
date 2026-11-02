@@ -357,23 +357,12 @@ COUNTER_BIG_DELTA = 50
 REGEN_BUTTON = "#regeneracja"
 
 
-def counter_rules() -> str:
-    return (
-        "• Klikasz po każdej serii (-1 cofa pomyłkę, +50 to cała dzienna porcja).\n"
-        "• Osiągnięty cel = dzień zaliczony, mniej = zwykła kara "
-        f"{config.PENALTY_PLN} PLN. Można iść ponad cel.\n"
-        f"• Liczą się pompki zrobione do 23:59, a klikać można do {config.POLL_HOUR}:00 rano.\n"
-        f"• Nie dasz rady, bo regenerujesz? Kliknij {REGEN_BUTTON}."
-    )
-
-
 def challenge_rules(prize_pln: int) -> str:
     return (
         f"• Klikasz po każdej serii (-1 cofa pomyłkę).\n"
         f"• Cel osiągnięty = dzień zaliczony, mniej = zwykła kara {config.PENALTY_PLN} PLN.\n"
         f"• Kto zrobi najwięcej, wygrywa <b>{prize_pln} zł</b> z puli (remis = podział).\n"
-        f"• Nie chcesz się ścigać? Po prostu wyklikaj swój cel.\n"
-        f"• Liczą się pompki zrobione do 23:59, a klikać można do {config.POLL_HOUR}:00 rano."
+        f"• Nie chcesz się ścigać? Po prostu wyklikaj swój cel."
     )
 
 
@@ -427,8 +416,8 @@ def counter_message(d, rows, prize_pln: int | None = None, closed: bool = False)
     summary = counter_summary(rows)
     if closed:
         return f"{head}\n\nZakończone. Wyniki końcowe:\n\n{board}\n\n{summary}"
-    rules = challenge_rules(prize_pln) if prize_pln is not None else counter_rules()
-    return f"{head}\n\n{rules}\n\n{board}\n\n{summary}"
+    rules = f"{challenge_rules(prize_pln)}\n\n" if prize_pln is not None else ""
+    return f"{head}\n\n{rules}{board}\n\n{summary}"
 
 
 def challenge_result(d, prize_pln: int, winners: list, best: int) -> str:

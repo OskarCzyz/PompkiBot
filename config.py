@@ -15,7 +15,7 @@ LAST_CHALLENGE_DAY = date.fromisoformat(os.environ.get("LAST_CHALLENGE_DAY", "20
 
 # Hour of day (Europe/Warsaw) the daily poll opens; it closes 24h later,
 # right as the next one opens.
-POLL_HOUR = 7
+POLL_HOUR = 5
 
 PENALTY_PLN = 10
 PUSHUPS_PER_DAY = 50

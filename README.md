@@ -53,7 +53,7 @@ SQLite, no external services required.
 
 ## How it works
 
-- Every day at **07:00** the bot closes **yesterday's** poll (opened 24
+- Every day at **05:00** the bot closes **yesterday's** poll (opened 24
   hours earlier), posts that day's miss report to the group, and opens
   **today's** poll — so exactly one poll is ever open at a time. It also
   pins the new poll and unpins the old one, so it requires admin rights
@@ -63,7 +63,7 @@ SQLite, no external services required.
 - Not voting counts the same as voting "#regeneracja" (the second poll
   option) — a rest day is still a miss, and so is silence.
 - The last poll opens on `LAST_CHALLENGE_DAY` (see `.env`) and closes 24h
-  later (07:00 the next day), at which point the bot posts a final summary:
+  later (05:00 the next day), at which point the bot posts a final summary:
   total pot, per-person balance, and who kept a perfect streak (zero
   misses) — followed by a group stats message (pushups done, completion
   spread, best/worst day and weekday, typical time, reminder effect, …), a
@@ -334,7 +334,7 @@ command can't spam it — use them in a private chat with the bot:
 
 ## Hosting
 
-This needs to run continuously for ~2 months to fire the 7:00/21:00 jobs
+This needs to run continuously for ~2 months to fire the 5:00/21:00 jobs
 reliably. Two options, in order of preference:
 
 1. **Free**: a small always-on VM, e.g. an Oracle Cloud "Always Free" tier
@@ -395,7 +395,7 @@ systemctl status pompkibot                   # expect "active (running)"; q to e
 journalctl -u pompkibot -n 30 --no-pager     # expect "PompkiBot started.", no tracebacks
 ```
 
-Avoid restarting right around 07:00 or 21:00. If git complains about
+Avoid restarting right around 05:00 or 21:00. If git complains about
 "dubious ownership", run
 `git config --global --add safe.directory /opt/pompkibot` once.
 
@@ -424,7 +424,7 @@ If the bot goes down, it catches up automatically as soon as it's back
 online: on startup it closes **every** poll whose 24h window has already
 elapsed (not just the most recent one), so even an outage spanning several
 days doesn't lose any day's votes/misses, then opens today's poll if it's
-past 07:00. This deliberately does nothing on a brand-new deployment (no
+past 05:00. This deliberately does nothing on a brand-new deployment (no
 prior poll exists yet), so it never opens a poll for a day you're tracking
 by hand instead.
 
