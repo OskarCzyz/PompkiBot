@@ -37,7 +37,7 @@ class FakeBot:
         raise AssertionError("a challenge day has no poll to stop")
 
 
-class ChallengeTest(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
@@ -54,11 +54,13 @@ class ChallengeTest(unittest.TestCase):
         os.unlink(self.tmp.name)
 
     def close(self):
-        db.create_poll(DAY, bot.CHALLENGE_POLL_PREFIX + DAY, 1)
+        db.create_poll(DAY, bot.COUNTER_POLL_PREFIX + DAY, 1)
         fake = FakeBot()
         asyncio.run(bot.close_poll_for_date(fake, date.fromisoformat(DAY)))
         return fake
 
+
+class ChallengeTest(Base):
     def test_count_never_negative_and_reached_at_tracks_goal(self):
         self.assertEqual(db.add_challenge_count(DAY, 1, -1, T.format("08:00")), 0)
         db.add_challenge_count(DAY, 1, 50, T.format("09:00"))
@@ -101,6 +103,76 @@ class ChallengeTest(unittest.TestCase):
         self.assertEqual(by_id[1].pushups, 50 + 120)
         self.assertEqual(by_id[2].pushups, 0)
         self.assertIn("Challenge'e", stats.stats_text(s))
+
+
+class CounterDayTest(Base):
+    """Normal (non-prize) days are counters too, with personal goals."""
+
+    def setUp(self):
+        super().setUp()
+        db.cancel_challenge(DAY)
+
+    def test_personal_goal_decides_done_and_goes_above_max(self):
+        db.set_daily_goal(2, 30, T.format("07:00"))
+        db.create_poll(DAY, bot.COUNTER_POLL_PREFIX + DAY, 1)
+        db.add_challenge_count(DAY, 1, 80, T.format("09:00"))
+        db.add_challenge_count(DAY, 2, 30, T.format("09:00"))
+        db.add_challenge_count(DAY, 3, 49, T.format("09:00"))
+        rows = {p["user_id"]: (c, g) for p, c, g, _ in bot.counter_rows(DAY)}
+        self.assertEqual(rows, {1: (80, 50), 2: (30, 30), 3: (49, 50)})
+        fake = asyncio.run(self._close())
+        self.assertFalse(db.has_miss(1, DAY))
+        self.assertFalse(db.has_miss(2, DAY))
+        self.assertTrue(db.has_miss(3, DAY))
+        self.assertFalse(any("wygrywa" in m or "Challenge" in m for m in fake.sent))
+
+    async def _close(self):
+        fake = FakeBot()
+        await bot.close_poll_for_date(fake, date.fromisoformat(DAY))
+        return fake
+
+    def test_goal_change_mid_day_recomputes_reached_at(self):
+        db.create_poll(DAY, bot.COUNTER_POLL_PREFIX + DAY, 1)
+        db.add_challenge_count(DAY, 1, 40, T.format("09:00"))
+        self.assertIsNone(db.get_challenge_counts(DAY)[1]["reached_at"])
+        db.set_daily_goal(1, 30, T.format("10:00"))
+        self.assertEqual(db.get_challenge_counts(DAY)[1]["reached_at"], T.format("10:00"))
+        db.set_daily_goal(1, 100, T.format("11:00"))
+        self.assertIsNone(db.get_challenge_counts(DAY)[1]["reached_at"])
+        db.set_daily_goal(1, None, T.format("12:00"))
+        self.assertEqual(db.get_challenge_counts(DAY)[1]["goal"], 50)
+
+    def test_goal_change_leaves_closed_days_alone(self):
+        db.create_poll(DAY, bot.COUNTER_POLL_PREFIX + DAY, 1)
+        db.add_challenge_count(DAY, 2, 30, T.format("09:00"))
+        asyncio.run(self._close())
+        db.set_daily_goal(2, 10, T.format("12:00"))
+        self.assertEqual(db.get_challenge_counts(DAY)[2]["goal"], 50)
+
+    def test_regen_tag_and_unlogged_people_listed(self):
+        db.create_poll(DAY, bot.COUNTER_POLL_PREFIX + DAY, 1)
+        poll = db.get_poll_by_date(DAY)
+        db.record_vote(poll["id"], 3, config.OPTION_NOT_YET, T.format("09:00"))
+        rows = {p["user_id"]: tag for p, _, _, tag in bot.counter_rows(DAY)}
+        self.assertEqual(rows, {1: None, 2: None, 3: "regen"})
+        fake = asyncio.run(self._close())
+        self.assertIn("#regeneracja", fake.sent[0])
+
+    def test_stats_use_personal_goal_for_done_days(self):
+        db.set_daily_goal(2, 30, T.format("07:00"))
+        db.create_poll(DAY, bot.COUNTER_POLL_PREFIX + DAY, 1)
+        db.add_challenge_count(DAY, 1, 80, T.format("09:00"))
+        db.add_challenge_count(DAY, 2, 30, T.format("09:00"))
+        asyncio.run(self._close())
+        by_id = {p.user_id: p for p in stats.collect().people}
+        self.assertEqual(by_id[1].pushups, 80)
+        self.assertEqual(by_id[2].pushups, 30)
+
+    def test_keyboard_layout(self):
+        kb = bot.counter_keyboard(DAY, False).inline_keyboard
+        self.assertEqual([[b.text for b in r] for r in kb], [["-1", "+1", "+5", "+10"], ["+50"], ["#regeneracja"]])
+        kb = bot.counter_keyboard(DAY, True).inline_keyboard
+        self.assertEqual(len(kb), 2)
 
 
 if __name__ == "__main__":

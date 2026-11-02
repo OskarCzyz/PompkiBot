@@ -227,9 +227,10 @@ async def close_poll_for_date(bot, close_date: date):
     if not poll_row or poll_row["closed"]:
         return
 
-    challenge_day = db.get_challenge_day(close_date.isoformat()) if is_challenge_poll(poll_row) else None
-    if challenge_day:
-        await finish_challenge_message(bot, poll_row, challenge_day)
+    counter = is_counter_poll(poll_row)
+    challenge_day = db.get_challenge_day(close_date.isoformat()) if counter else None
+    if counter:
+        await finish_counter_message(bot, poll_row, challenge_day)
     else:
         try:
             await bot.stop_poll(chat_id=config.GROUP_CHAT_ID, message_id=poll_row["message_id"])
@@ -266,7 +267,7 @@ async def close_poll_for_date(bot, close_date: date):
     )
     if challenge_day:
         best, winner_ids = stats.challenge_winners(
-            {p["user_id"]: c for p, c in challenge_ranking_rows(close_date.isoformat())}
+            {p["user_id"]: count for p, count, _goal, _tag in counter_rows(close_date.isoformat())}
         )
         await bot.send_message(
             chat_id=config.GROUP_CHAT_ID,
@@ -316,30 +317,22 @@ async def job_daily_rollover(context: ContextTypes.DEFAULT_TYPE):
 
     if today <= config.LAST_CHALLENGE_DAY and not db.get_poll_by_date(today.isoformat()):
         challenge_day = db.get_challenge_day(today.isoformat())
-        if challenge_day:
-            sent = await bot.send_message(
-                chat_id=config.GROUP_CHAT_ID,
-                text=messages.challenge_message(today, challenge_day["prize_pln"], []),
-                parse_mode=ParseMode.HTML,
-                reply_markup=challenge_keyboard(today.isoformat()),
-            )
-            db.create_poll(today.isoformat(), CHALLENGE_POLL_PREFIX + today.isoformat(), sent.message_id)
-            if challenge_day["announce_message_id"]:
-                try:
-                    await bot.unpin_chat_message(
-                        chat_id=config.GROUP_CHAT_ID, message_id=challenge_day["announce_message_id"]
-                    )
-                except Exception:
-                    log.debug("Could not unpin the challenge announcement for %s", today)
-        else:
-            sent = await bot.send_poll(
-                chat_id=config.GROUP_CHAT_ID,
-                question=messages.poll_question(today),
-                options=messages.POLL_OPTIONS,
-                is_anonymous=False,
-                allows_multiple_answers=False,
-            )
-            db.create_poll(today.isoformat(), sent.poll.id, sent.message_id)
+        sent = await bot.send_message(
+            chat_id=config.GROUP_CHAT_ID,
+            text=messages.counter_message(
+                today, counter_rows_for(today.isoformat(), None), challenge_day["prize_pln"] if challenge_day else None
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=counter_keyboard(today.isoformat(), bool(challenge_day)),
+        )
+        db.create_poll(today.isoformat(), COUNTER_POLL_PREFIX + today.isoformat(), sent.message_id)
+        if challenge_day and challenge_day["announce_message_id"]:
+            try:
+                await bot.unpin_chat_message(
+                    chat_id=config.GROUP_CHAT_ID, message_id=challenge_day["announce_message_id"]
+                )
+            except Exception:
+                log.debug("Could not unpin the challenge announcement for %s", today)
         try:
             await bot.pin_chat_message(
                 chat_id=config.GROUP_CHAT_ID, message_id=sent.message_id, disable_notification=True
@@ -407,17 +400,14 @@ async def job_reminder(context: ContextTypes.DEFAULT_TYPE):
     if not poll_row:
         return
 
-    participants = db.get_active_participants()
-    on_leave_ids = db.get_vacation_user_ids(today.isoformat())
-    if is_challenge_poll(poll_row):
-        rows = challenge_ranking_rows(today.isoformat())
-        counts = {p["user_id"]: c for p, c in rows}
-        not_done = [
-            p for p in participants
-            if counts.get(p["user_id"], 0) < config.PUSHUPS_PER_DAY and p["user_id"] not in on_leave_ids
-        ]
-        text = messages.challenge_reminder(not_done, rows)
+    if is_counter_poll(poll_row):
+        rows = counter_rows(today.isoformat())
+        not_done = [p for p, count, goal, tag in rows if count < goal and tag != "leave"]
+        race = bool(db.get_challenge_day(today.isoformat()))
+        text = messages.counter_reminder(not_done, rows, race)
     else:
+        participants = db.get_active_participants()
+        on_leave_ids = db.get_vacation_user_ids(today.isoformat())
         votes = db.get_votes_for_poll(poll_row["id"])
         not_done = [
             p for p in participants
@@ -463,40 +453,61 @@ async def on_poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- challenge days ----------
 
-CHALLENGE_POLL_PREFIX = "challenge:"
+# The daily message is a counter for everyone; the prefix stays "challenge:"
+# because that's what already-stored counter polls carry.
+COUNTER_POLL_PREFIX = "challenge:"
 CHALLENGE_EDIT_DELAY = 2  # seconds; taps within it share one message edit
+MAX_DAILY_GOAL = 1000
+PREVIEW_DAY = "preview"
 
 
-def is_challenge_poll(poll_row) -> bool:
-    return poll_row["telegram_poll_id"].startswith(CHALLENGE_POLL_PREFIX)
+def is_counter_poll(poll_row) -> bool:
+    return poll_row["telegram_poll_id"].startswith(COUNTER_POLL_PREFIX)
 
 
-def challenge_keyboard(day: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(f"{delta:+d}", callback_data=f"ch:{day}:{delta}")
-        for delta in messages.CHALLENGE_DELTAS
-    ]])
+def counter_keyboard(day: str, challenge: bool) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(f"{d:+d}", callback_data=f"ch:{day}:{d}") for d in messages.COUNTER_DELTAS],
+        [InlineKeyboardButton(f"+{messages.COUNTER_BIG_DELTA}", callback_data=f"ch:{day}:{messages.COUNTER_BIG_DELTA}")],
+    ]
+    if not challenge:
+        rows.append([InlineKeyboardButton(messages.REGEN_BUTTON, callback_data=f"ch:{day}:regen")])
+    return InlineKeyboardMarkup(rows)
 
 
-def challenge_ranking_rows(day: str) -> list:
-    """[(participant, count)] for active participants not on leave that day,
-    best first; people who logged nothing are left out."""
+def counter_rows_for(day: str, votes: dict | None) -> list:
+    """[(participant, count, goal, tag)] for every active participant, best
+    first. tag: 'leave' (on leave that day), 'regen' (tapped #regeneracja)."""
     counts = db.get_challenge_counts(day)
     on_leave_ids = db.get_vacation_user_ids(day)
-    rows = [
-        (p, counts[p["user_id"]]["count"])
-        for p in db.get_active_participants()
-        if p["user_id"] in counts and counts[p["user_id"]]["count"] > 0 and p["user_id"] not in on_leave_ids
-    ]
-    return sorted(rows, key=lambda r: -r[1])
+    votes = votes or {}
+    rows = []
+    for p in db.get_active_participants():
+        row = counts.get(p["user_id"])
+        count = row["count"] if row else 0
+        goal = db.row_goal(row) if row else db.participant_goal(p)
+        if p["user_id"] in on_leave_ids:
+            tag = "leave"
+        elif votes.get(p["user_id"]) == config.OPTION_NOT_YET:
+            tag = "regen"
+        else:
+            tag = None
+        rows.append((p, count, goal, tag))
+    return sorted(rows, key=lambda r: (r[3] == "leave", -r[1]))
 
 
-async def finish_challenge_message(bot, poll_row, challenge_day):
-    """At close: turns everyone's count of PUSHUPS_PER_DAY or more into a
-    regular 'done' vote (timed when they reached it), so misses, stats and
-    admin corrections work exactly as on a normal day, then freezes the
-    message with the final ranking."""
+def counter_rows(day: str) -> list:
+    poll_row = db.get_poll_by_date(day)
+    return counter_rows_for(day, db.get_votes_for_poll(poll_row["id"]) if poll_row else None)
+
+
+async def finish_counter_message(bot, poll_row, challenge_day):
+    """At close: turns everyone who reached their goal into a regular 'done'
+    vote (timed when they reached it), so misses, stats and admin corrections
+    work exactly as before counters, then freezes the message with the final
+    results."""
     day = poll_row["poll_date"]
+    db.freeze_challenge_goals(day)
     for user_id, row in db.get_challenge_counts(day).items():
         if row["reached_at"]:
             db.record_vote(poll_row["id"], user_id, config.OPTION_DONE, row["reached_at"])
@@ -504,42 +515,54 @@ async def finish_challenge_message(bot, poll_row, challenge_day):
         await bot.edit_message_text(
             chat_id=config.GROUP_CHAT_ID,
             message_id=poll_row["message_id"],
-            text=messages.challenge_message(
-                date.fromisoformat(day), challenge_day["prize_pln"], challenge_ranking_rows(day), closed=True
+            text=messages.counter_message(
+                date.fromisoformat(day),
+                counter_rows(day),
+                challenge_day["prize_pln"] if challenge_day else None,
+                closed=True,
             ),
             parse_mode=ParseMode.HTML,
         )
     except Exception:
-        log.exception("Could not finalize the challenge message for %s", day)
+        log.exception("Could not finalize the counter message for %s", day)
 
 
-async def job_edit_challenge_message(context: ContextTypes.DEFAULT_TYPE):
+async def job_edit_counter_message(context: ContextTypes.DEFAULT_TYPE):
     day = context.job.data
     poll_row = db.get_poll_by_date(day)
-    challenge_day = db.get_challenge_day(day)
-    if not poll_row or poll_row["closed"] or not challenge_day:
+    if not poll_row or poll_row["closed"]:
         return
+    challenge_day = db.get_challenge_day(day)
     try:
         await context.bot.edit_message_text(
             chat_id=config.GROUP_CHAT_ID,
             message_id=poll_row["message_id"],
-            text=messages.challenge_message(
-                date.fromisoformat(day), challenge_day["prize_pln"], challenge_ranking_rows(day)
+            text=messages.counter_message(
+                date.fromisoformat(day), counter_rows(day), challenge_day["prize_pln"] if challenge_day else None
             ),
             parse_mode=ParseMode.HTML,
-            reply_markup=challenge_keyboard(day),
+            reply_markup=counter_keyboard(day, bool(challenge_day)),
         )
     except BadRequest as e:
         if "not modified" not in str(e).lower():
-            log.warning("Could not update the challenge message for %s: %s", day, e)
+            log.warning("Could not update the counter message for %s: %s", day, e)
 
 
-async def on_challenge_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def schedule_counter_edit(context: ContextTypes.DEFAULT_TYPE, day: str):
+    job_name = f"challenge-edit-{day}"
+    if not context.job_queue.get_jobs_by_name(job_name):
+        context.job_queue.run_once(job_edit_counter_message, CHALLENGE_EDIT_DELAY, data=day, name=job_name)
+
+
+async def on_counter_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    _, day, delta = query.data.split(":")
+    _, day, action = query.data.split(":")
+    if day == PREVIEW_DAY:
+        await query.answer(f"Podgląd - przycisk {action}.")
+        return
     poll_row = db.get_poll_by_date(day)
     if not poll_row or poll_row["closed"]:
-        await query.answer("Challenge zakończony.")
+        await query.answer("Ten dzień jest już zamknięty.")
         return
 
     user = query.from_user
@@ -552,14 +575,20 @@ async def on_challenge_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
     if not participant and not user.is_bot:
         db.add_participant(user.id, user.username, user.first_name)
-        log.info("Auto-registered %s (%s) via challenge tap", user.first_name, user.id)
+        log.info("Auto-registered %s (%s) via counter tap", user.first_name, user.id)
 
-    count = db.add_challenge_count(day, user.id, int(delta), datetime.now(config.TIMEZONE).isoformat())
-    await query.answer(f"Masz {count} 💪")
-
-    job_name = f"challenge-edit-{day}"
-    if not context.job_queue.get_jobs_by_name(job_name):
-        context.job_queue.run_once(job_edit_challenge_message, CHALLENGE_EDIT_DELAY, data=day, name=job_name)
+    now = datetime.now(config.TIMEZONE).isoformat()
+    if action == "regen":
+        if db.get_votes_for_poll(poll_row["id"]).get(user.id) == config.OPTION_NOT_YET:
+            db.clear_vote(poll_row["id"], user.id)
+            await query.answer("Wycofano #regeneracja.")
+        else:
+            db.record_vote(poll_row["id"], user.id, config.OPTION_NOT_YET, now)
+            await query.answer("Zapisano #regeneracja 🛌")
+    else:
+        count = db.add_challenge_count(day, user.id, int(action), now)
+        await query.answer(f"Masz {count} 💪")
+    schedule_counter_edit(context, day)
 
 
 async def cmd_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -632,6 +661,54 @@ async def cmd_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"Zaplanowano challenge na {messages.format_date_pl(day)} (nagroda {prize} zł). Ogłoszenie poszło na grupę."
     )
+
+
+async def cmd_goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin: /cel @osoba 30 sets someone's daily goal (also above the
+    default, e.g. 100); /cel @osoba reset puts it back. Without a target it
+    lists everyone's goals."""
+    if not is_admin(update.effective_user.id):
+        return
+    target, args = resolve_target(update, context)
+    default = config.PUSHUPS_PER_DAY
+    if not target:
+        lines = [f"{p['first_name']}: {db.participant_goal(p)}" for p in db.get_active_participants()]
+        await update.message.reply_text(
+            f"Cele dzienne (domyślnie {default}):\n" + "\n".join(lines)
+            + "\n\nUstaw: /cel @osoba 30 (albo reply + /cel 30), przywróć: /cel @osoba reset"
+        )
+        return
+    if not args:
+        await update.message.reply_text(
+            f"Cel {target['first_name']}: {db.participant_goal(target)}. Zmień: /cel @osoba 30 albo reset."
+        )
+        return
+    if args[0].lower() == "reset":
+        goal = None
+    elif args[0].isdigit() and 0 < int(args[0]) <= MAX_DAILY_GOAL:
+        goal = int(args[0])
+    else:
+        await update.message.reply_text(f"Cel musi być liczbą od 1 do {MAX_DAILY_GOAL} albo reset.")
+        return
+    db.set_daily_goal(target["user_id"], goal, datetime.now(config.TIMEZONE).isoformat())
+    for poll_row in db.get_unclosed_counter_polls():
+        schedule_counter_edit(context, poll_row["poll_date"])
+    await update.message.reply_text(messages.goal_set(target["first_name"], goal or default, default))
+
+
+async def cmd_debug_counter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """TEMP admin debug: posts a normal-day and a challenge-day counter
+    message here (real roster and goals, inert buttons) to eyeball the layout."""
+    if not is_admin(update.effective_user.id):
+        return
+    today = datetime.now(config.TIMEZONE).date()
+    rows = counter_rows_for(today.isoformat(), None)
+    for prize in (None, config.CHALLENGE_PRIZE_PLN):
+        await update.message.reply_text(
+            messages.counter_message(today, rows, prize),
+            parse_mode=ParseMode.HTML,
+            reply_markup=counter_keyboard(PREVIEW_DAY, prize is not None),
+        )
 
 
 # ---------- group membership events ----------
@@ -1638,6 +1715,8 @@ ADMIN_COMMANDS = PARTICIPANT_COMMANDS + [
     BotCommand("napisz", "Napisz na grupie jako bot"),
     BotCommand("regeneracja", "Oznacz nieobecność jako #regeneracja"),
     BotCommand("urlop", "Urlop od wyzwania (bez kar, bez usuwania z grupy)"),
+    BotCommand("debugliczniki", "TEMP: podgląd wiadomości z licznikiem"),
+    BotCommand("cel", "Dzienny cel pompek dla osoby (@osoba 30)"),
     BotCommand("challenge", "Zaplanuj challenge (RRRR-MM-DD [kwota]) / cancel"),
     BotCommand("odswiez", "Pobierz wpłaty z banku teraz"),
     BotCommand("nadplaty", "Kto ma nadpłatę"),
@@ -1685,6 +1764,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("regeneracja", cmd_regeneracja))
     app.add_handler(CommandHandler("urlop", cmd_vacation))
     app.add_handler(CommandHandler("challenge", cmd_challenge))
+    app.add_handler(CommandHandler("cel", cmd_goal))
+    app.add_handler(CommandHandler("debugliczniki", cmd_debug_counter))
     app.add_handler(CommandHandler("odswiez", cmd_refresh_payments))
     app.add_handler(CommandHandler("nadplaty", cmd_credits))
     app.add_handler(CommandHandler("wplata", cmd_add_payment))
@@ -1694,7 +1775,7 @@ def build_application() -> Application:
     app.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_chat_member))
     app.add_handler(ChatMemberHandler(on_chat_member_update, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(CallbackQueryHandler(on_payment_callback, pattern=r"^pm:"))
-    app.add_handler(CallbackQueryHandler(on_challenge_callback, pattern=r"^ch:"))
+    app.add_handler(CallbackQueryHandler(on_counter_callback, pattern=r"^ch:"))
     app.add_handler(CallbackQueryHandler(on_admin_callback))
     app.add_error_handler(error_handler)
 

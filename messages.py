@@ -97,8 +97,8 @@ def reminder(not_done_participants: list) -> str:
 def start_reply(first_name: str) -> str:
     return (
         f"Cześć, {first_name}! Zostałeś/-aś zapisany/a do wyzwania Pompek. 💪\n\n"
-        f"Codziennie o {config.POLL_HOUR}:00 w grupie pojawia się ankieta — głosuj, czy zrobiłeś/-aś "
-        f"pompki. Masz na to 24 godzin.\n\n"
+        f"Codziennie o {config.POLL_HOUR}:00 w grupie pojawia się licznik — klikaj +1 / +5 / +10 / +50 "
+        f"po każdej serii, aż dobijesz do swojego celu. Masz na to 24 godziny.\n\n"
         f"Napisz /status w dowolnej chwili, żeby sprawdzić swoje saldo."
     )
 
@@ -350,18 +350,29 @@ def manual_removed(name: str, amount: int, unpaid_dates: list[str], credit: int,
     return text
 
 
-# ---------- challenge days ----------
+# ---------- daily counter & challenge days ----------
 
-CHALLENGE_DELTAS = [1, 5, 10, -1]
+COUNTER_DELTAS = [-1, 1, 5, 10]
+COUNTER_BIG_DELTA = 50
+REGEN_BUTTON = "#regeneracja"
+
+
+def counter_rules() -> str:
+    return (
+        "• Klikasz po każdej serii (-1 cofa pomyłkę, +50 to cała dzienna porcja).\n"
+        "• Osiągnięty cel = dzień zaliczony, mniej = zwykła kara "
+        f"{config.PENALTY_PLN} PLN. Można iść ponad cel.\n"
+        f"• Liczą się pompki zrobione do 23:59, a klikać można do {config.POLL_HOUR}:00 rano.\n"
+        f"• Nie dasz rady, bo regenerujesz? Kliknij {REGEN_BUTTON}."
+    )
 
 
 def challenge_rules(prize_pln: int) -> str:
-    goal = config.PUSHUPS_PER_DAY
     return (
-        f"• Klikasz +1 / +5 / +10 po każdej serii (-1 cofa pomyłkę).\n"
-        f"• {goal} pompek = dzień zaliczony, mniej = zwykła kara {config.PENALTY_PLN} PLN.\n"
+        f"• Klikasz po każdej serii (-1 cofa pomyłkę).\n"
+        f"• Cel osiągnięty = dzień zaliczony, mniej = zwykła kara {config.PENALTY_PLN} PLN.\n"
         f"• Kto zrobi najwięcej, wygrywa <b>{prize_pln} zł</b> z puli (remis = podział).\n"
-        f"• Nie chcesz się ścigać? Po prostu wyklikaj {goal}.\n"
+        f"• Nie chcesz się ścigać? Po prostu wyklikaj swój cel.\n"
         f"• Liczą się pompki zrobione do 23:59, a klikać można do {config.POLL_HOUR}:00 rano."
     )
 
@@ -369,32 +380,55 @@ def challenge_rules(prize_pln: int) -> str:
 def challenge_announcement(d, prize_pln: int) -> str:
     return (
         f"🏁 <b>CHALLENGE: {format_date_pl(d)}</b>\n\n"
-        f"Tego dnia zamiast zwykłej ankiety będzie licznik pompek.\n\n"
+        f"Tego dnia oprócz zwykłego licznika walczymy o nagrodę.\n\n"
         + challenge_rules(prize_pln)
     )
 
 
 def challenge_cancelled(d) -> str:
-    return f"❌ Challenge {format_date_pl(d)} odwołany - tego dnia zwykła ankieta."
+    return f"❌ Challenge {format_date_pl(d)} odwołany - tego dnia zwykły licznik."
 
 
-def challenge_ranking(rows) -> str:
-    """rows: [(participant, count)], sorted by count desc."""
-    if not rows:
-        return "Na razie nikt nic nie wpisał."
+def counter_board(rows, race: bool) -> str:
+    """rows: [(participant, count, goal, tag)] with tag None, 'regen' or 'leave'.
+    Everyone is listed as count/goal; on a prize challenge day, the people
+    who logged something get medals."""
     medals = {0: "🥇", 1: "🥈", 2: "🥉"}
     lines = []
-    for i, (p, count) in enumerate(rows):
-        done = " ✅" if count >= config.PUSHUPS_PER_DAY else ""
-        lines.append(f"{medals.get(i, f'{i + 1}.')} {mention_html(p)}: <b>{count}</b>{done}")
+    ranked = 0
+    for p, count, goal, tag in rows:
+        if tag == "leave":
+            lines.append(f"🏖️ {mention_html(p)}: urlop")
+            continue
+        if race and count > 0:
+            bullet = medals.get(ranked, f"{ranked + 1}.")
+            ranked += 1
+        else:
+            bullet = "▫️"
+        mark = " ✅" if count >= goal else (" 🛌" if tag == "regen" else "")
+        lines.append(f"{bullet} {mention_html(p)}: <b>{count}</b>/{goal}{mark}")
     return "\n".join(lines)
 
 
-def challenge_message(d, prize_pln: int, rows, closed: bool = False) -> str:
-    head = f"🏁 <b>CHALLENGE - {format_date_pl(d)}</b>"
+def counter_summary(rows) -> str:
+    active = [r for r in rows if r[3] != "leave"]
+    done = sum(1 for _, count, goal, _ in active if count >= goal)
+    total = sum(count for _, count, _, _ in active)
+    return f"Zaliczyło <b>{done}/{len(active)}</b> · razem <b>{total}</b> pompek 💪"
+
+
+def counter_message(d, rows, prize_pln: int | None = None, closed: bool = False) -> str:
+    """The daily message. prize_pln is set on a challenge day."""
+    if prize_pln is not None:
+        head = f"🏁 <b>CHALLENGE - {format_date_pl(d)}</b>"
+    else:
+        head = f"💪 <b>Pompki na dziś - {format_date_pl(d)}</b>"
+    board = counter_board(rows, race=prize_pln is not None)
+    summary = counter_summary(rows)
     if closed:
-        return f"{head}\n\nZakończony. Wyniki końcowe:\n\n{challenge_ranking(rows)}"
-    return f"{head}\n\n{challenge_rules(prize_pln)}\n\n<b>Ranking:</b>\n{challenge_ranking(rows)}"
+        return f"{head}\n\nZakończone. Wyniki końcowe:\n\n{board}\n\n{summary}"
+    rules = challenge_rules(prize_pln) if prize_pln is not None else counter_rules()
+    return f"{head}\n\n{rules}\n\n{board}\n\n{summary}"
 
 
 def challenge_result(d, prize_pln: int, winners: list, best: int) -> str:
@@ -409,10 +443,15 @@ def challenge_result(d, prize_pln: int, winners: list, best: int) -> str:
     )
 
 
-def challenge_reminder(not_done_participants: list, rows) -> str:
+def counter_reminder(not_done_participants: list, rows, race: bool) -> str:
     mentions = ", ".join(mention_html(p) for p in not_done_participants)
     you_have = "masz" if len(not_done_participants) == 1 else "macie"
     return (
-        f"Przypomnienie! {mentions} - {you_have} jeszcze mniej niż {config.PUSHUPS_PER_DAY} pompek "
-        f"w dzisiejszym challenge'u! 💪\n\n<b>Ranking:</b>\n{challenge_ranking(rows)}"
+        f"Przypomnienie! {mentions} - {you_have} jeszcze nie zrobiony dzisiejszy cel! 💪\n\n"
+        f"{counter_board(rows, race)}\n\n{counter_summary(rows)}"
     )
+
+
+def goal_set(name: str, goal: int, default: int) -> str:
+    note = " (domyślny)" if goal == default else ""
+    return f"🎯 Cel dla {name}: {goal} pompek dziennie{note}. Obowiązuje od bieżącego dnia."

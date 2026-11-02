@@ -64,7 +64,9 @@ class Person:
     days: list[str] = field(default_factory=list)          # closed poll dates they were in
     missed: set[str] = field(default_factory=set)
     done_offsets: dict[str, float] = field(default_factory=dict)  # date -> hours since open, habit votes only
-    challenge_counts: dict[str, int] = field(default_factory=dict)  # challenge date -> logged pushups
+    challenge_counts: dict[str, int] = field(default_factory=dict)  # prize challenge date -> logged pushups
+    day_counts: dict[str, int] = field(default_factory=dict)  # counter-day date -> logged pushups
+    day_goals: dict[str, int] = field(default_factory=dict)   # counter-day date -> that day's personal goal
 
     @property
     def user_id(self) -> int:
@@ -80,10 +82,13 @@ class Person:
 
     @property
     def pushups(self) -> int:
-        """Done days count PUSHUPS_PER_DAY, challenge days their real count
-        (never less, so an admin /markdone still counts a full day)."""
-        goal = config.PUSHUPS_PER_DAY
-        return sum(max(self.challenge_counts.get(d, 0), goal) for d in self.done_days)
+        """Done days count the person's goal that day (PUSHUPS_PER_DAY on the
+        days before counters), or the real count if higher (never less, so an
+        admin /markdone still counts a full day)."""
+        default = config.PUSHUPS_PER_DAY
+        return sum(
+            max(self.day_counts.get(d, 0), self.day_goals.get(d) or default) for d in self.done_days
+        )
 
     @property
     def completion(self) -> float:
@@ -230,7 +235,11 @@ def build(
     challenge_set = {c["challenge_date"] for c in challenges}
     for c in challenge_counts:
         person = by_id.get(c["user_id"])
-        if person and c["challenge_date"] in challenge_set:
+        if not person or c["challenge_date"] not in poll_set:
+            continue
+        person.day_counts[c["challenge_date"]] = c["count"]
+        person.day_goals[c["challenge_date"]] = c["goal"] or config.PUSHUPS_PER_DAY
+        if c["challenge_date"] in challenge_set:
             person.challenge_counts[c["challenge_date"]] = c["count"]
 
     return ChallengeStats(poll_dates=list(poll_dates), people=people, challenges=challenges)

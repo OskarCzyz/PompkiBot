@@ -11,9 +11,14 @@ SQLite, no external services required.
 
 ## Features
 
-- **Daily poll, automatically** — opens every morning, closes and reports
-  the next, so exactly one is ever open at a time.
-- **Evening reminders** — @-mentions anyone who hasn't voted yet.
+- **Daily counter, automatically** — every morning the bot posts a message
+  with buttons `-1 / +1 / +5 / +10`, `+50` and `#regeneracja`. It lists
+  everyone as `count/goal` (e.g. `80/50 ✅`, going above the goal is fine)
+  plus a live summary. It closes and reports the next morning, so exactly
+  one is ever open at a time. Reaching your goal is a "done" day.
+- **Personal goals** — admins can set a different daily goal per person
+  (`/cel`), e.g. 30 for someone struggling or 100 for someone who wants more.
+- **Evening reminders** — @-mentions anyone who hasn't reached their goal yet.
 - **Self-service registration** — anyone can join by DMing the bot `/start`,
   no admin effort required. Several admin-driven fallbacks exist too
   (by numeric ID, `@username`, forwarded message, or group reply) for
@@ -293,6 +298,10 @@ also be targeted the same ways — plus a fourth, easiest one:
   report then marks them as "nie zapomniał, to świadomy wybór". If that
   day's report already went out, the group gets that note right away.
   Payment is unchanged.
+- `/cel` — daily pushup goal per person. `/cel @user 30` (or reply / ID),
+  `/cel @user reset` for the default, `/cel` alone lists everyone's goals.
+  Applies to the open day immediately and to all days after it; closed days
+  keep the goal they had.
 - `/urlop` — leave from the challenge (injury, illness) without leaving the
   group. Without a name, a picker; then buttons for 7/14/21/28 days, or
   type `/urlop @user 21` (days, counting today), `/urlop @user 2026-11-09`

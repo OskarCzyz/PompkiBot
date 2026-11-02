@@ -80,8 +80,8 @@ CREATE TABLE IF NOT EXISTS bank_state (
     value  TEXT NOT NULL
 );
 
--- Challenge days: on these dates the daily poll is replaced by a message
--- with +1/+5/+10 buttons, and whoever logs the most pushups wins prize_pln.
+-- Challenge days: on these dates whoever logs the most pushups wins prize_pln.
+-- (Every day is a counter message now; challenge days just add the prize.)
 CREATE TABLE IF NOT EXISTS challenge_days (
     challenge_date        TEXT PRIMARY KEY,
     prize_pln             INTEGER NOT NULL,
@@ -89,13 +89,16 @@ CREATE TABLE IF NOT EXISTS challenge_days (
     cancelled             INTEGER NOT NULL DEFAULT 0
 );
 
--- reached_at: when count first reached PUSHUPS_PER_DAY (cleared if it drops
+-- goal: the person's target that day (snapshot of participants.daily_goal,
+-- NULL on rows from before personal goals = PUSHUPS_PER_DAY).
+-- reached_at: when count first reached the goal (cleared if it drops
 -- back below) - becomes the 'done' vote's time at close.
 CREATE TABLE IF NOT EXISTS challenge_counts (
     challenge_date  TEXT NOT NULL,
     user_id         INTEGER NOT NULL,
     count           INTEGER NOT NULL DEFAULT 0,
     reached_at      TEXT,
+    goal            INTEGER,
     PRIMARY KEY (challenge_date, user_id)
 );
 """
@@ -128,6 +131,11 @@ def init_db():
             conn.execute("ALTER TABLE participants ADD COLUMN pay_code TEXT")
         if "credit" not in pcols:
             conn.execute("ALTER TABLE participants ADD COLUMN credit INTEGER NOT NULL DEFAULT 0")
+        if "daily_goal" not in pcols:
+            conn.execute("ALTER TABLE participants ADD COLUMN daily_goal INTEGER")
+        ccols = {r["name"] for r in conn.execute("PRAGMA table_info(challenge_counts)")}
+        if "goal" not in ccols:
+            conn.execute("ALTER TABLE challenge_counts ADD COLUMN goal INTEGER")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_pay_code ON participants(pay_code)"
         )
@@ -242,6 +250,13 @@ def get_unclosed_polls_up_to(cutoff_date: str):
         return conn.execute(
             "SELECT * FROM polls WHERE closed = 0 AND poll_date <= ? ORDER BY poll_date",
             (cutoff_date,),
+        ).fetchall()
+
+
+def get_unclosed_counter_polls():
+    with _conn() as conn:
+        return conn.execute(
+            "SELECT * FROM polls WHERE closed = 0 AND telegram_poll_id LIKE 'challenge:%'"
         ).fetchall()
 
 
@@ -666,19 +681,38 @@ def cancel_challenge(challenge_date: str):
         )
 
 
+def participant_goal(participant) -> int:
+    """Daily pushup target: the personal one if an admin set it, else the default."""
+    return participant["daily_goal"] or config.PUSHUPS_PER_DAY
+
+
+def row_goal(count_row) -> int:
+    """Goal on a challenge_counts row (NULL on rows from before personal goals)."""
+    return count_row["goal"] or config.PUSHUPS_PER_DAY
+
+
 def add_challenge_count(challenge_date: str, user_id: int, delta: int, now: str) -> int:
     """Adds delta (never going below 0) and keeps reached_at in step with
-    crossing PUSHUPS_PER_DAY. Returns the new count."""
-    goal = config.PUSHUPS_PER_DAY
+    crossing the person's goal for that day. Returns the new count."""
     with _conn() as conn:
+        row = conn.execute(
+            "SELECT goal FROM challenge_counts WHERE challenge_date = ? AND user_id = ?",
+            (challenge_date, user_id),
+        ).fetchone()
+        if row:
+            goal = row["goal"] or config.PUSHUPS_PER_DAY
+        else:
+            p = conn.execute("SELECT daily_goal FROM participants WHERE user_id = ?", (user_id,)).fetchone()
+            goal = (p["daily_goal"] if p else None) or config.PUSHUPS_PER_DAY
         conn.execute(
-            """INSERT INTO challenge_counts (challenge_date, user_id, count, reached_at)
-               VALUES (?1, ?2, MAX(0, ?3), CASE WHEN ?3 >= ?4 THEN ?5 END)
+            """INSERT INTO challenge_counts (challenge_date, user_id, count, reached_at, goal)
+               VALUES (?1, ?2, MAX(0, ?3), CASE WHEN ?3 >= ?4 THEN ?5 END, ?4)
                ON CONFLICT(challenge_date, user_id) DO UPDATE SET
                    reached_at = CASE
                        WHEN MAX(0, count + ?3) < ?4 THEN NULL
                        WHEN reached_at IS NULL THEN ?5
                        ELSE reached_at END,
+                   goal = ?4,
                    count = MAX(0, count + ?3)""",
             (challenge_date, user_id, delta, goal, now),
         )
@@ -688,8 +722,47 @@ def add_challenge_count(challenge_date: str, user_id: int, delta: int, now: str)
         ).fetchone()["count"]
 
 
+def set_daily_goal(user_id: int, goal: int | None, now: str):
+    """Sets (None = back to the default) a person's goal from now on. Days
+    that are already closed keep the goal they had; days still open switch to
+    the new one, with reached_at recomputed against what's been logged."""
+    with _conn() as conn:
+        conn.execute("UPDATE participants SET daily_goal = ? WHERE user_id = ?", (goal, user_id))
+        effective = goal or config.PUSHUPS_PER_DAY
+        open_days = conn.execute(
+            "SELECT poll_date FROM polls WHERE closed = 0 AND telegram_poll_id LIKE 'challenge:%'"
+        ).fetchall()
+        for d in open_days:
+            conn.execute(
+                """INSERT INTO challenge_counts (challenge_date, user_id, count, goal)
+                   VALUES (?1, ?2, 0, ?3)
+                   ON CONFLICT(challenge_date, user_id) DO UPDATE SET
+                       goal = ?3,
+                       reached_at = CASE
+                           WHEN count < ?3 THEN NULL
+                           WHEN reached_at IS NULL THEN ?4
+                           ELSE reached_at END""",
+                (d["poll_date"], user_id, effective, now),
+            )
+
+
+def freeze_challenge_goals(challenge_date: str):
+    """At close: gives everyone active a row with the goal they had, so stats
+    know it even for people who never tapped."""
+    with _conn() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO challenge_counts (challenge_date, user_id, count, goal)
+               SELECT ?1, user_id, 0, COALESCE(daily_goal, ?2) FROM participants WHERE active = 1""",
+            (challenge_date, config.PUSHUPS_PER_DAY),
+        )
+        conn.execute(
+            "UPDATE challenge_counts SET goal = ?2 WHERE challenge_date = ?1 AND goal IS NULL",
+            (challenge_date, config.PUSHUPS_PER_DAY),
+        )
+
+
 def get_challenge_counts(challenge_date: str) -> dict:
-    """user_id -> row (count, reached_at) for one challenge day."""
+    """user_id -> row (count, reached_at, goal) for one day."""
     with _conn() as conn:
         rows = conn.execute(
             "SELECT * FROM challenge_counts WHERE challenge_date = ?", (challenge_date,)
@@ -709,11 +782,10 @@ def get_closed_challenges():
 
 
 def get_all_challenge_counts():
-    """Counts from every challenge day that actually ran."""
+    """Counts (and goals) from every counter day that has closed."""
     with _conn() as conn:
         return conn.execute(
-            """SELECT cc.challenge_date, cc.user_id, cc.count FROM challenge_counts cc
-               JOIN challenge_days c ON c.challenge_date = cc.challenge_date
+            """SELECT cc.challenge_date, cc.user_id, cc.count, cc.goal FROM challenge_counts cc
                JOIN polls p ON p.poll_date = cc.challenge_date
-               WHERE c.cancelled = 0"""
+               WHERE p.closed = 1"""
         ).fetchall()
