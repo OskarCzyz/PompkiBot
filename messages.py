@@ -432,13 +432,10 @@ def challenge_result(d, prize_pln: int, winners: list, best: int) -> str:
     )
 
 
-def counter_reminder(not_done_participants: list, rows, race: bool) -> str:
+def counter_reminder(not_done_participants: list) -> str:
     mentions = ", ".join(mention_html(p) for p in not_done_participants)
     you_have = "masz" if len(not_done_participants) == 1 else "macie"
-    return (
-        f"Przypomnienie! {mentions} - {you_have} jeszcze nie zrobiony dzisiejszy cel! 💪\n\n"
-        f"{counter_board(rows, race)}\n\n{counter_summary(rows)}"
-    )
+    return f"Przypomnienie! {mentions} - {you_have} jeszcze nie zrobiony dzisiejszy cel! 💪"
 
 
 def goal_set(name: str, goal: int, default: int) -> str:

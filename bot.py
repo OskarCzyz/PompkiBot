@@ -403,8 +403,7 @@ async def job_reminder(context: ContextTypes.DEFAULT_TYPE):
     if is_counter_poll(poll_row):
         rows = counter_rows(today.isoformat())
         not_done = [p for p, count, goal, tag in rows if count < goal and tag != "leave"]
-        race = bool(db.get_challenge_day(today.isoformat()))
-        text = messages.counter_reminder(not_done, rows, race)
+        text = messages.counter_reminder(not_done)
     else:
         participants = db.get_active_participants()
         on_leave_ids = db.get_vacation_user_ids(today.isoformat())
