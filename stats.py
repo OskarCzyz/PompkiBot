@@ -67,6 +67,7 @@ class Person:
     challenge_counts: dict[str, int] = field(default_factory=dict)  # prize challenge date -> logged pushups
     day_counts: dict[str, int] = field(default_factory=dict)  # counter-day date -> logged pushups
     day_goals: dict[str, int] = field(default_factory=dict)   # counter-day date -> that day's personal goal
+    counter_start: str | None = None  # first counter-day date of the whole challenge
 
     @property
     def user_id(self) -> int:
@@ -89,6 +90,18 @@ class Person:
         return sum(
             max(self.day_counts.get(d, 0), self.day_goals.get(d) or default) for d in self.done_days
         )
+
+    @property
+    def counter_days(self) -> list[str]:
+        """Days since counters began (the first day anyone has a counts row),
+        when any amount of pushups could be logged."""
+        return [d for d in self.days if self.counter_start and d >= self.counter_start]
+
+    @property
+    def avg_per_counter_day(self) -> float | None:
+        """Average logged pushups per counter day, missed days counting 0."""
+        days = self.counter_days
+        return sum(self.day_counts.get(d, 0) for d in days) / len(days) if days else None
 
     @property
     def completion(self) -> float:
@@ -241,6 +254,10 @@ def build(
         person.day_goals[c["challenge_date"]] = c["goal"] or config.PUSHUPS_PER_DAY
         if c["challenge_date"] in challenge_set:
             person.challenge_counts[c["challenge_date"]] = c["count"]
+
+    counter_dates = [c["challenge_date"] for c in challenge_counts if c["challenge_date"] in poll_set]
+    for person in people:
+        person.counter_start = min(counter_dates, default=None)
 
     return ChallengeStats(poll_dates=list(poll_dates), people=people, challenges=challenges)
 
@@ -517,6 +534,9 @@ def personal_text(stats: ChallengeStats, person: Person, owed: int, paid: int) -
         f"🏆 Miejsce: {rank}. z {len(people)}" + (" (ex aequo)" if tied else ""),
         f"🔥 Najdłuższa passa: {person.longest_streak} dni z rzędu",
     ]
+    avg = person.avg_per_counter_day
+    if avg is not None:
+        lines.append(f"📈 Średnio dziennie: <b>{avg:.1f}</b> pompek")
     if any(person.challenge_counts.values()):
         best_day = max(person.challenge_counts, key=person.challenge_counts.get)
         lines.append(f"🏁 Rekord w challenge'u: {person.challenge_counts[best_day]} ({short_date(best_day)})")
