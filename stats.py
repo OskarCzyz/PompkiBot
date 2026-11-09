@@ -255,9 +255,17 @@ def build(
         if c["challenge_date"] in challenge_set:
             person.challenge_counts[c["challenge_date"]] = c["count"]
 
-    counter_dates = [c["challenge_date"] for c in challenge_counts if c["challenge_date"] in poll_set]
+    # Counters are continuous from some day on: the start is the day after the
+    # last closed day nobody has a count for (an old poll, or a one-off prize
+    # challenge that was followed by regular polls).
+    counted = {c["challenge_date"] for c in challenge_counts}
+    counter_start = None
+    for d in reversed(poll_dates):
+        if d not in counted:
+            break
+        counter_start = d
     for person in people:
-        person.counter_start = min(counter_dates, default=None)
+        person.counter_start = counter_start
 
     return ChallengeStats(poll_dates=list(poll_dates), people=people, challenges=challenges)
 
